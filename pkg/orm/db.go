@@ -12,21 +12,25 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/nelthaarion/breezeorm/pkg/cache"
-	"github.com/nelthaarion/breezeorm/pkg/compiler"
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
-	"github.com/nelthaarion/breezeorm/pkg/execution"
-	"github.com/nelthaarion/breezeorm/pkg/optimizer"
-	"github.com/nelthaarion/breezeorm/pkg/plugins"
+	"github.com/nelthaarion/breezorm/pkg/cache"
+	"github.com/nelthaarion/breezorm/pkg/compiler"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/execution"
+	"github.com/nelthaarion/breezorm/pkg/optimizer"
+	"github.com/nelthaarion/breezorm/pkg/plugins"
+	"github.com/nelthaarion/breezorm/pkg/scanner"
 )
 
 // DefaultCompiledQueryCacheSize bounds DB.compiledCache. See the CAVEAT on
 // compiler.PreHash before making this cache request/context-sensitive.
 const DefaultCompiledQueryCacheSize = 2000
 
+// DefaultScanPlanCacheSize bounds DB.scanPlanCache.
+const DefaultScanPlanCacheSize = 2000
+
 // DB is the top-level ORM handle. It is safe for concurrent use — the
 // underlying *sql.DB is already a connection pool, and every cache it owns
-// (via Executor, and the CompiledQuery cache below) is a bounded,
+// (via Executor, and the CompiledQuery/ScanPlan caches below) is a bounded,
 // thread-safe LRU.
 type DB struct {
 	sqlDB    *sql.DB
@@ -45,7 +49,17 @@ type DB struct {
 	// before; only the downstream SQL-text/prepared-statement caches in
 	// Executor were actually warm. Benchmarked: this cache is what makes
 	// "compile once, execute forever" true for this layer too.
-	compiledCache *cache.LRU[string, *compiler.CompiledQuery]
+	compiledCache *cache.LRU[uint64, *compiler.CompiledQuery]
+
+	// scanPlanCache caches *scanner.Plan (which result columns map to which
+	// struct field, via precomputed offsets) keyed by (table, column list).
+	// This was the actual root cause of breezorm trailing GORM/Bun/sqlx on
+	// reads in benchmarking: pkg/scanner.Compile was being called fresh on
+	// every single Find call — for a fixed query shape, the result column
+	// list never changes, so the Plan it produces never changes either.
+	// Same "compile once" principle as compiledCache, one layer further
+	// down the pipeline.
+	scanPlanCache *cache.LRU[uint64, *scanner.Plan]
 }
 
 // Option configures a DB at Open time.
@@ -77,7 +91,13 @@ func WithExecutorOptions(opts ...execution.Option) Option {
 // (default DefaultCompiledQueryCacheSize). Size for the number of distinct
 // query *shapes* your application issues, not the number of requests.
 func WithCompiledQueryCacheSize(n int) Option {
-	return func(db *DB) { db.compiledCache = cache.NewLRU[string, *compiler.CompiledQuery](n, nil) }
+	return func(db *DB) { db.compiledCache = cache.NewLRU[uint64, *compiler.CompiledQuery](n, nil) }
+}
+
+// WithScanPlanCacheSize overrides the bound on the scan-plan cache (default
+// DefaultScanPlanCacheSize).
+func WithScanPlanCacheSize(n int) Option {
+	return func(db *DB) { db.scanPlanCache = cache.NewLRU[uint64, *scanner.Plan](n, nil) }
 }
 
 // Open wraps an already-configured *sql.DB (the caller chooses and imports
@@ -88,7 +108,8 @@ func Open(sqlDB *sql.DB, d dialect.Dialect, opts ...Option) *DB {
 		sqlDB:         sqlDB,
 		dialect:       d,
 		passes:        optimizer.DefaultPipeline(),
-		compiledCache: cache.NewLRU[string, *compiler.CompiledQuery](DefaultCompiledQueryCacheSize, nil),
+		compiledCache: cache.NewLRU[uint64, *compiler.CompiledQuery](DefaultCompiledQueryCacheSize, nil),
+		scanPlanCache: cache.NewLRU[uint64, *scanner.Plan](DefaultScanPlanCacheSize, nil),
 	}
 	for _, o := range opts {
 		o(db)

@@ -1,6 +1,6 @@
 package migrations
 
-import "github.com/nelthaarion/breezeorm/pkg/metadata"
+import "github.com/nelthaarion/breezorm/pkg/metadata"
 
 // DesiredSchema is the schema implied by compiled model metadata — i.e. what
 // "auto migration" wants the database to look like.

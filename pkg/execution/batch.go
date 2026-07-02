@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
-	"github.com/nelthaarion/breezeorm/pkg/pool"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/pool"
 )
 
 // MaxBulkInsertRows bounds how many rows a single GenerateBulkInsert call

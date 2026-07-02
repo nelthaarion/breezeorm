@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nelthaarion/breezeorm/pkg/metadata"
+	"github.com/nelthaarion/breezorm/pkg/metadata"
 )
 
 // LoadStrategy identifies how a relation's data should be fetched.

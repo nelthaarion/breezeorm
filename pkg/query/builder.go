@@ -1,6 +1,6 @@
 package query
 
-import "github.com/nelthaarion/breezeorm/pkg/dialect"
+import "github.com/nelthaarion/breezorm/pkg/dialect"
 
 // PreloadSpec describes an eager-load / preload request, potentially nested
 // (e.g. "Posts.Comments.Author") and conditional (extra Where applied to the

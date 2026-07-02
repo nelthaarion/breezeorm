@@ -6,9 +6,10 @@ package scanner
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"unsafe"
 
-	"github.com/nelthaarion/breezeorm/pkg/metadata"
+	"github.com/nelthaarion/breezorm/pkg/metadata"
 )
 
 // FieldAssignment binds a result-set column index to a destination field.
@@ -18,10 +19,21 @@ type FieldAssignment struct {
 }
 
 // Plan is the precompiled scan plan for one (Table, result-column-list) pair.
-// Building a Plan reflects on the struct type; using a Plan to scan rows does not.
+// Building a Plan reflects on the struct type; using a Plan to scan rows does
+// not. Plan is intentionally NOT safe to mutate after Compile returns it —
+// callers should treat it as immutable and cache it (see pkg/orm's
+// scanPlanCache), the same "compile once" contract as every other plan type
+// in this codebase.
 type Plan struct {
 	Table       *metadata.Table
 	Assignments []FieldAssignment
+
+	// targetsPool recycles the []any destination slice ScanRow needs to
+	// pass to rows.Scan. Before this, every single row scanned allocated a
+	// fresh []any (plus N reflect.NewAt().Interface() boxes into it) —
+	// for a 50-row result set that's 50 slice allocations that this pool
+	// turns into (after warmup) zero.
+	targetsPool sync.Pool
 }
 
 // Compile builds a Plan by matching SQL result columns against the table's
@@ -36,6 +48,11 @@ func Compile(tbl *metadata.Table, resultColumns []string) (*Plan, error) {
 			continue // extra/computed column with no destination field: skipped, not an error
 		}
 		p.Assignments = append(p.Assignments, FieldAssignment{ColumnIndex: i, Column: col})
+	}
+	n := len(p.Assignments)
+	p.targetsPool.New = func() any {
+		s := make([]any, n)
+		return &s
 	}
 	return p, nil
 }
@@ -56,8 +73,26 @@ type RowsSource interface {
 //
 // dest must point to a value of the same Go type the Plan's Table was
 // compiled from (enforced by callers via generics in pkg/execution).
+//
+// NOTE ON reflect.NewAt: this still costs one reflect.NewAt().Interface()
+// call per column per row — real "zero reflection on the hot path" for the
+// scan step specifically requires knowing each field's concrete type at
+// compile time, which is exactly what code generation (see
+// cmd/breezorm-gen) provides: a generated scanner writes
+// `&((*T)(dest)).Field` directly, no reflect.Value involved at all. This
+// path is the honest current state for the reflection-based (non-generated)
+// route; the pooling below removes the *allocation* overhead, not the
+// reflect.NewAt call itself.
 func (p *Plan) ScanRow(rows RowsSource, dest unsafe.Pointer) error {
-	targets := make([]any, len(p.Assignments))
+	targetsPtr := p.targetsPool.Get().(*[]any)
+	targets := *targetsPtr
+	defer func() {
+		for i := range targets {
+			targets[i] = nil // drop references before returning to pool
+		}
+		p.targetsPool.Put(targetsPtr)
+	}()
+
 	for i, a := range p.Assignments {
 		fieldPtr := unsafe.Pointer(uintptr(dest) + a.Column.Offset)
 		targets[i] = reflect.NewAt(a.Column.Type, fieldPtr).Interface()
@@ -73,7 +108,11 @@ func (p *Plan) ScanRow(rows RowsSource, dest unsafe.Pointer) error {
 // build p.Table.
 func ScanAll[T any](rows RowsSource, p *Plan) ([]T, error) {
 	defer rows.Close()
-	var out []T
+	// Pre-sizing at a small default avoids the first few append-triggered
+	// reallocations/copies that grow-from-nil would otherwise cost on every
+	// call; callers with a known LIMIT could size this exactly in a future
+	// revision by threading the limit through from pkg/orm.
+	out := make([]T, 0, 16)
 	for rows.Next() {
 		var v T
 		ptr := unsafe.Pointer(&v)

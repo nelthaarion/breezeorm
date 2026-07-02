@@ -1,6 +1,6 @@
 package planner
 
-import "github.com/nelthaarion/breezeorm/pkg/dialect"
+import "github.com/nelthaarion/breezorm/pkg/dialect"
 
 // PhysicalPlan is the dialect-bound, execution-ready plan produced by the
 // physical planner from an (optimized) LogicalPlan. Unlike LogicalPlan, it

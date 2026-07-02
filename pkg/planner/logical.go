@@ -4,8 +4,8 @@
 package planner
 
 import (
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
-	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/query"
 )
 
 // NodeKind identifies the relational-algebra operator a LogicalNode represents.

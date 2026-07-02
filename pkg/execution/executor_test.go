@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
 )
 
 func TestExecutor_PrepareIsCachedAcrossCalls(t *testing.T) {

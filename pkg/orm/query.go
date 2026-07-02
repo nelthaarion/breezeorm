@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/nelthaarion/breezeorm/pkg/compiler"
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
-	"github.com/nelthaarion/breezeorm/pkg/execution"
-	"github.com/nelthaarion/breezeorm/pkg/metadata"
-	"github.com/nelthaarion/breezeorm/pkg/query"
-	"github.com/nelthaarion/breezeorm/pkg/scanner"
-	"github.com/nelthaarion/breezeorm/pkg/transaction"
+	"github.com/nelthaarion/breezorm/pkg/compiler"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/execution"
+	"github.com/nelthaarion/breezorm/pkg/metadata"
+	"github.com/nelthaarion/breezorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/scanner"
+	"github.com/nelthaarion/breezorm/pkg/transaction"
 )
 
 // Query is the public, generic fluent query type. Every builder method
@@ -121,15 +121,26 @@ func (q *Query[T]) Find(ctx context.Context) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	cols, err := rows.Columns()
-	if err != nil {
-		rows.Close()
-		return nil, err
-	}
-	plan, err := scanner.Compile(q.table, cols)
-	if err != nil {
-		rows.Close()
-		return nil, err
+
+	// Reuse the CompiledQuery's CacheKey (already computed by q.compile
+	// above) as the scan-plan cache key too: it already captures the exact
+	// query shape, which is exactly what determines the result column list.
+	// On a hit this skips both rows.Columns() and scanner.Compile's
+	// column-to-field matching entirely — the fix for the read-path
+	// overhead identified in benchmark/README.md.
+	plan, ok := q.db.scanPlanCache.Get(cq.CacheKey)
+	if !ok {
+		cols, err := rows.Columns()
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		plan, err = scanner.Compile(q.table, cols)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		q.db.scanPlanCache.Set(cq.CacheKey, plan)
 	}
 	return scanner.ScanAll[T](rows, plan)
 }

@@ -3,8 +3,8 @@ package plugins
 import (
 	"context"
 
-	"github.com/nelthaarion/breezeorm/pkg/planner"
-	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/planner"
+	"github.com/nelthaarion/breezorm/pkg/query"
 )
 
 // SoftDelete injects `WHERE <column> IS NULL` into every Scan/Filter on the

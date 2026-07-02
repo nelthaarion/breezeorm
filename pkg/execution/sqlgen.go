@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
-	"github.com/nelthaarion/breezeorm/pkg/planner"
-	"github.com/nelthaarion/breezeorm/pkg/pool"
-	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/planner"
+	"github.com/nelthaarion/breezorm/pkg/pool"
+	"github.com/nelthaarion/breezorm/pkg/query"
 )
 
 // GeneratedSQL is the rendered statement plus its positional bind arguments,

@@ -3,7 +3,7 @@ package compiler
 import (
 	"testing"
 
-	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/query"
 )
 
 type prehashWidget struct {
@@ -36,6 +36,26 @@ func TestPreHash_DiffersAcrossShape(t *testing.T) {
 	}
 }
 
+func TestPreHash_DeterministicAcrossCalls(t *testing.T) {
+	// This is the correctness-critical property of the maphash-based
+	// rewrite: hash/maphash's zero value picks a NEW random seed on first
+	// write if SetSeed isn't called explicitly, which would make PreHash
+	// return a different value every single call for identical input —
+	// silently turning every cache keyed by it into a permanent miss. This
+	// test would catch that regression immediately (it doesn't currently
+	// fail, confirming the package-level hashSeed + explicit SetSeed is
+	// wired correctly).
+	b := query.New[prehashWidget]("widgets").
+		Where(query.Predicate{Column: "id", Op: query.OpEq, Value: 1}).
+		OrderBy(query.OrderTerm{Column: "id"})
+
+	first := PreHash(b, "postgres")
+	for i := 0; i < 1000; i++ {
+		if got := PreHash(b, "postgres"); got != first {
+			t.Fatalf("PreHash not deterministic: call %d = %d, want %d", i, got, first)
+		}
+	}
+}
 func TestPreHash_DiffersAcrossDialect(t *testing.T) {
 	b := query.New[prehashWidget]("widgets")
 	a := PreHash(b, "postgres")

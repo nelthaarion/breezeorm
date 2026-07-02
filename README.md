@@ -1,4 +1,4 @@
-# breezeorm
+# breezorm
 
 A from-scratch Go ORM/database engine scaffold: metadata compiler → query
 compiler → logical planner → optimizer → physical planner → SQL generator →
@@ -158,11 +158,49 @@ test-only file) to integration-test statement caching, eviction, coalescing,
 timeouts, and retry against a real `*sql.DB` without adding an external
 driver dependency to the module.
 
-## Benchmarks vs GORM / Bun / sqlx / database/sql
+## Status as of this session
 
-See `benchmark/` — a separate Go module (kept separate so breezeorm itself stays
+Four priorities were agreed for this pass: (1) close the read-performance
+gap, (2) a driver abstraction layer, (3) expression engine + optimizer
+passes, (4) code generation. **(1) and (2) are done, tested, and verified
+against the benchmark suite below. (3) and (4) were not started** — flagging
+this explicitly rather than shipping something half-edited or pretending
+broader scope than what's actually in this zip.
+
+- **Read-performance fix (done)**: `DB.compiledCache` (`pkg/compiler/prehash.go`) and `DB.scanPlanCache`
+  (`pkg/orm/db.go`/`query.go`) close the two "recompiled on every call
+  instead of cached" gaps the benchmark diagnosed, plus a pooled per-row
+  scan-target slice in `pkg/scanner`, plus (found by profiling, not
+  guessing) replacing `crypto/sha256`+`fmt.Fprintf`+`hex.EncodeToString`
+  with `hash/maphash`+direct `WriteString`/`WriteByte` in both structural-hash
+  functions — `PreHash` was costing 10.9% of total per-query CPU time on a
+  cache *lookup key*, confirmed by `go tool pprof`, cut to 1.2%. Net effect:
+  breezorm's Insert became the fastest of all four ORMs benchmarked, and it
+  now allocates less than GORM on every operation. Reads (FindByID,
+  SelectWhereLimit) are still the slowest of the four in wall-clock time —
+  see `benchmark/README.md` for the profiled reason why (per-row
+  `reflect.NewAt` boxing) and why the CPU-time fix above didn't
+  proportionally move wall-clock time for those two operations specifically.
+- **Driver abstraction layer (done)**: `pkg/driver` defines the minimal
+  interface (`DB`/`Stmt`/`Rows`/`Result`) `Executor` now depends on instead
+  of `*sql.DB` directly; `pkg/driver/sqladapter` is the reference
+  `database/sql`-backed implementation. `orm.Open(sqlDB *sql.DB, ...)` is
+  **unchanged** — this was a from-inside refactor, not a breaking API
+  change. A future native driver (pgx, etc.) implements `pkg/driver`'s
+  interfaces directly; transactions remain intentionally
+  `*sql.DB`/`*sql.Tx`-based for now (see the doc comment in
+  `pkg/driver/driver.go` for why that's a separate, larger effort).
+- **Not started**: typed CASE/EXISTS/IN-subquery/ANY/ALL expressions, real
+  predicate-pushdown/join-reordering/alias-elimination optimizer passes
+  (still the documented no-op stubs from the original scaffold), and any
+  code generation. See "What's intentionally stubbed" above — that section
+  hasn't changed this session.
+
+
+
+See `benchmark/` — a separate Go module (kept separate so breezorm itself stays
 dependency-free) with real, runnable benchmarks against real dependencies.
-breezeorm wins or ties GORM/Bun on Insert and Update; is currently 1.5-2x
+breezorm wins or ties GORM/Bun on Insert and Update; is currently 1.5-2x
 slower than GORM/Bun/sqlx on reads (FindByID, SelectWhereLimit), a gap this
 benchmark run diagnosed precisely: `pkg/scanner.Compile` rebuilds its scan
 plan on every `Find` call instead of being cached, the same bug the

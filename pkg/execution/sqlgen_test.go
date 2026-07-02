@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nelthaarion/breezeorm/pkg/compiler"
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
-	"github.com/nelthaarion/breezeorm/pkg/optimizer"
-	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/compiler"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/optimizer"
+	"github.com/nelthaarion/breezorm/pkg/query"
 )
 
 type widget struct {

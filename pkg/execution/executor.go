@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelthaarion/breezeorm/pkg/cache"
-	"github.com/nelthaarion/breezeorm/pkg/compiler"
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	"github.com/nelthaarion/breezorm/pkg/cache"
+	"github.com/nelthaarion/breezorm/pkg/compiler"
+	"github.com/nelthaarion/breezorm/pkg/dialect"
+	ormdriver "github.com/nelthaarion/breezorm/pkg/driver"
+	"github.com/nelthaarion/breezorm/pkg/driver/sqladapter"
 )
 
 const (
@@ -39,12 +41,17 @@ const (
 )
 
 // Executor owns the prepared-statement cache and SQL-text cache for one
-// *sql.DB + dialect pair, and is the only place raw database/sql calls
-// happen. All caches are bounded (LRU) so a workload with unbounded query
-// shape diversity cannot exhaust memory or leak prepared statements on the
-// server; evicted statements are Close()'d.
+// database connection + dialect pair, and is the only place calls into the
+// driver abstraction (pkg/driver) happen. All caches are bounded (LRU) so a
+// workload with unbounded query shape diversity cannot exhaust memory or
+// leak prepared statements on the server; evicted statements are Close()'d.
+//
+// Executor talks to ormdriver.DB, not *sql.DB directly — see pkg/driver's
+// doc comment for why. New() is the backward-compatible constructor
+// (accepts *sql.DB, as before the driver abstraction existed);
+// NewWithDriver() is the general one a future native-driver adapter would use.
 type Executor struct {
-	db      *sql.DB
+	db      ormdriver.DB
 	dialect dialect.Dialect
 
 	// planTextCache maps a compiler.CompiledQuery.CacheKey (structural,
@@ -53,13 +60,13 @@ type Executor struct {
 	// ExtractArgs, which is what makes caching the text safe: two calls with
 	// the same CacheKey but different WHERE literals correctly get the same
 	// SQL string and different, correct Args.
-	planTextCache *cache.LRU[string, string]
+	planTextCache *cache.LRU[uint64, string]
 
-	// stmtCache maps rendered SQL text to a prepared *sql.Stmt. Bounded and
+	// stmtCache maps rendered SQL text to a prepared statement. Bounded and
 	// eviction-safe: the onEvict callback closes the statement so evicted
 	// entries don't leak server-side resources or client-side file
 	// descriptors.
-	stmtCache *cache.LRU[string, *sql.Stmt]
+	stmtCache *cache.LRU[string, ormdriver.Stmt]
 
 	defaultTimeout time.Duration
 	retry          RetryPolicy
@@ -93,7 +100,7 @@ func WithStmtCacheSize(n int) Option {
 }
 
 func WithPlanCacheSize(n int) Option {
-	return func(ex *Executor) { ex.planTextCache = cache.NewLRU[string, string](n, nil) }
+	return func(ex *Executor) { ex.planTextCache = cache.NewLRU[uint64, string](n, nil) }
 }
 
 func WithDefaultTimeout(d time.Duration) Option {
@@ -104,20 +111,27 @@ func WithRetryPolicy(p RetryPolicy) Option {
 	return func(ex *Executor) { ex.retry = p }
 }
 
-func newStmtCache(size int) *cache.LRU[string, *sql.Stmt] {
-	return cache.NewLRU[string, *sql.Stmt](size, func(_ string, stmt *sql.Stmt) {
+func newStmtCache(size int) *cache.LRU[string, ormdriver.Stmt] {
+	return cache.NewLRU[string, ormdriver.Stmt](size, func(_ string, stmt ormdriver.Stmt) {
 		_ = stmt.Close() // best-effort: nothing actionable if this fails at eviction time
 	})
 }
 
-// New creates an Executor bound to a live connection pool and dialect, with
-// production-safe defaults: bounded caches, a default query timeout, and
-// retry on transient errors.
+// New creates an Executor bound to a *sql.DB and dialect — the backward-
+// compatible constructor, unchanged in signature from before the driver
+// abstraction existed. Internally wraps db via pkg/driver/sqladapter.
 func New(db *sql.DB, d dialect.Dialect, opts ...Option) *Executor {
+	return NewWithDriver(sqladapter.Wrap(db), d, opts...)
+}
+
+// NewWithDriver creates an Executor bound to any ormdriver.DB implementation
+// — the general constructor. Use this when backing breezorm with something
+// other than database/sql once such an adapter exists.
+func NewWithDriver(db ormdriver.DB, d dialect.Dialect, opts ...Option) *Executor {
 	ex := &Executor{
 		db:             db,
 		dialect:        d,
-		planTextCache:  cache.NewLRU[string, string](DefaultPlanCacheSize, nil),
+		planTextCache:  cache.NewLRU[uint64, string](DefaultPlanCacheSize, nil),
 		stmtCache:      newStmtCache(DefaultStmtCacheSize),
 		defaultTimeout: DefaultQueryTimeout,
 		retry:          DefaultRetryPolicy(),
@@ -129,7 +143,7 @@ func New(db *sql.DB, d dialect.Dialect, opts ...Option) *Executor {
 }
 
 // Close purges the prepared-statement cache, closing every cached statement.
-// Call this before closing the underlying *sql.DB to avoid leaking
+// Call this before closing the underlying connection pool to avoid leaking
 // server-side prepared-statement handles.
 func (ex *Executor) Close() error {
 	ex.stmtCache.Purge()
@@ -172,24 +186,25 @@ func (ex *Executor) Resolve(cq *compiler.CompiledQuery) (*GeneratedSQL, error) {
 	return &GeneratedSQL{SQL: sqlText, Args: args}, nil
 }
 
-// prepare returns a cached *sql.Stmt for the given SQL text, preparing it on
-// first use. Concurrent misses for identical SQL text are coalesced (see
-// cache.LRU.GetOrCompute), so a burst of concurrent first-time callers for
-// the same new query shape triggers exactly one PrepareContext round trip.
-func (ex *Executor) prepare(ctx context.Context, sqlText string) (*sql.Stmt, error) {
-	return ex.stmtCache.GetOrCompute(sqlText, func() (*sql.Stmt, error) {
+// prepare returns a cached prepared statement for the given SQL text,
+// preparing it on first use. Concurrent misses for identical SQL text are
+// coalesced (see cache.LRU.GetOrCompute), so a burst of concurrent
+// first-time callers for the same new query shape triggers exactly one
+// PrepareContext round trip.
+func (ex *Executor) prepare(ctx context.Context, sqlText string) (ormdriver.Stmt, error) {
+	return ex.stmtCache.GetOrCompute(sqlText, func() (ormdriver.Stmt, error) {
 		return ex.db.PrepareContext(ctx, sqlText)
 	})
 }
 
-// Query runs a SELECT and returns a *Rows wrapping the driver's *sql.Rows.
+// Query runs a SELECT and returns a *Rows wrapping the driver's row cursor.
 // The caller MUST close the returned *Rows (directly, or by consuming it
 // through pkg/scanner, which does so internally) — Close both releases the
 // underlying connection back to the pool AND cancels this call's timeout
 // context. Failing to close leaks both.
 func (ex *Executor) Query(ctx context.Context, gen *GeneratedSQL) (*Rows, error) {
 	ctx, cancel := ex.withTimeout(ctx)
-	rows, err := withRetryGeneric(ctx, ex.retry, func() (*sql.Rows, error) {
+	rows, err := withRetryGeneric(ctx, ex.retry, func() (ormdriver.Rows, error) {
 		stmt, err := ex.prepare(ctx, gen.SQL)
 		if err != nil {
 			return nil, fmt.Errorf("execution: prepare: %w", err)
@@ -207,11 +222,12 @@ func (ex *Executor) Query(ctx context.Context, gen *GeneratedSQL) (*Rows, error)
 	return &Rows{Rows: rows, cancel: cancel}, nil
 }
 
-// Rows wraps *sql.Rows so that Close() also releases the timeout context
-// created for this query. Embeds *sql.Rows so Next/Scan/Err/Columns are all
-// available directly, satisfying pkg/scanner's RowsSource interface.
+// Rows wraps the driver's row cursor so that Close() also releases the
+// timeout context created for this query. Embeds ormdriver.Rows so
+// Next/Scan/Err/Columns are all available directly, satisfying pkg/scanner's
+// RowsSource interface.
 type Rows struct {
-	*sql.Rows
+	ormdriver.Rows
 	cancel context.CancelFunc
 }
 
@@ -224,10 +240,10 @@ func (r *Rows) Close() error {
 }
 
 // Exec runs an INSERT/UPDATE/DELETE/UPSERT without a result set.
-func (ex *Executor) Exec(ctx context.Context, gen *GeneratedSQL) (sql.Result, error) {
+func (ex *Executor) Exec(ctx context.Context, gen *GeneratedSQL) (ormdriver.Result, error) {
 	ctx, cancel := ex.withTimeout(ctx)
 	defer cancel()
-	return withRetryGeneric(ctx, ex.retry, func() (sql.Result, error) {
+	return withRetryGeneric(ctx, ex.retry, func() (ormdriver.Result, error) {
 		stmt, err := ex.prepare(ctx, gen.SQL)
 		if err != nil {
 			return nil, fmt.Errorf("execution: prepare: %w", err)
@@ -242,12 +258,12 @@ func (ex *Executor) Exec(ctx context.Context, gen *GeneratedSQL) (sql.Result, er
 
 // BulkExec executes a pre-rendered multi-row INSERT (see GenerateBulkInsert)
 // in a single round trip.
-func (ex *Executor) BulkExec(ctx context.Context, gen *GeneratedSQL) (sql.Result, error) {
+func (ex *Executor) BulkExec(ctx context.Context, gen *GeneratedSQL) (ormdriver.Result, error) {
 	return ex.Exec(ctx, gen)
 }
 
-// withRetry runs fn, retrying on transient errors per ex.retry. It never
-// retries once the context is done, and never retries more than
+// withRetryGeneric runs fn, retrying on transient errors per policy. It
+// never retries once the context is done, and never retries more than
 // MaxAttempts-1 additional times.
 func withRetryGeneric[T any](ctx context.Context, policy RetryPolicy, fn func() (T, error)) (T, error) {
 	attempts := policy.MaxAttempts
@@ -280,7 +296,7 @@ func withRetryGeneric[T any](ctx context.Context, policy RetryPolicy, fn func() 
 // isRetryableError classifies deadlocks, serialization failures, and lock
 // wait timeouts as transient. This is a string-matching heuristic because
 // this package has no driver-specific dependency (by design — see
-// pkg/orm/db.go); callers with a specific driver imported can layer a more
+// pkg/driver); callers with a specific driver imported can layer a more
 // precise typed-error check on top by wrapping RetryPolicy's classification
 // — left as a documented extension point rather than baked in here.
 func isRetryableError(err error) bool {
@@ -314,11 +330,11 @@ func backoff(policy RetryPolicy, attempt int) time.Duration {
 	return time.Duration(rand.Int63n(int64(d) + 1)) // full jitter
 }
 
-// Cursor is a streaming row iterator for large result sets. It wraps
-// *sql.Rows directly rather than materializing a full []T slice, and owns
-// releasing the timeout context set up by QueryCursor.
+// Cursor is a streaming row iterator for large result sets. It wraps the
+// driver's row cursor directly rather than materializing a full []T slice,
+// and owns releasing the timeout context set up by QueryCursor.
 type Cursor struct {
-	rows   *sql.Rows
+	rows   ormdriver.Rows
 	cancel context.CancelFunc
 }
 
@@ -326,7 +342,7 @@ type Cursor struct {
 // buffering all rows in memory. The caller MUST call Close.
 func (ex *Executor) QueryCursor(ctx context.Context, gen *GeneratedSQL) (*Cursor, error) {
 	ctx, cancel := ex.withTimeout(ctx)
-	rows, err := withRetryGeneric(ctx, ex.retry, func() (*sql.Rows, error) {
+	rows, err := withRetryGeneric(ctx, ex.retry, func() (ormdriver.Rows, error) {
 		stmt, err := ex.prepare(ctx, gen.SQL)
 		if err != nil {
 			return nil, fmt.Errorf("execution: prepare: %w", err)
@@ -340,12 +356,12 @@ func (ex *Executor) QueryCursor(ctx context.Context, gen *GeneratedSQL) (*Cursor
 	return &Cursor{rows: rows, cancel: cancel}, nil
 }
 
-func (c *Cursor) Next() bool     { return c.rows.Next() }
-func (c *Cursor) Err() error     { return c.rows.Err() }
-func (c *Cursor) Raw() *sql.Rows { return c.rows }
+func (c *Cursor) Next() bool          { return c.rows.Next() }
+func (c *Cursor) Err() error          { return c.rows.Err() }
+func (c *Cursor) Raw() ormdriver.Rows { return c.rows }
 
-// Close releases both the underlying *sql.Rows and the timeout context
-// created for this cursor. Safe to call multiple times.
+// Close releases both the underlying rows and the timeout context created
+// for this cursor. Safe to call multiple times.
 func (c *Cursor) Close() error {
 	defer c.cancel()
 	return c.rows.Close()

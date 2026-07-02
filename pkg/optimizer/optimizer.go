@@ -5,8 +5,8 @@
 package optimizer
 
 import (
-	"github.com/nelthaarion/breezeorm/pkg/planner"
-	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/planner"
+	"github.com/nelthaarion/breezorm/pkg/query"
 )
 
 // Pass is a single optimizer rewrite rule.

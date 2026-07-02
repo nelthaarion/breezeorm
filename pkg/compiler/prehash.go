@@ -1,11 +1,9 @@
 package compiler
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
+	"hash/maphash"
 
-	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezorm/pkg/query"
 )
 
 // PreHash computes a structural cache key directly from a query.Builder's
@@ -22,6 +20,14 @@ import (
 // literal values — so `Where(id=1)` and `Where(id=2)` hit the same cache
 // entry.
 //
+// PERFORMANCE: PreHash runs on *every* Find/Create/UpdateAll/Delete call —
+// cache hit or miss — since it IS the cache lookup key. A CPU profile of a
+// real benchmark run showed the original fmt.Fprintf + crypto/sha256 +
+// hex.EncodeToString version costing ~11% of total per-query CPU time by
+// itself, more expensive than the actual database round trip's Go-side
+// overhead. See structuralHash's doc comment in compiler.go for the same
+// rationale, applied here.
+//
 // CAVEAT: a cache keyed by PreHash must not be used when a plugin chain's
 // BeforePlan rewrite can vary by request (e.g. a multi-tenancy plugin
 // injecting a per-request tenant predicate) — reusing a cached CompiledQuery
@@ -31,55 +37,76 @@ import (
 // this MUST be revisited (e.g. by making such caches request-scoped, or by
 // excluding builders from the cache when the plugin chain is non-empty and
 // context-dependent) before those plugins are made functional.
-func PreHash[T any](b query.Builder[T], dialectName string) string {
-	h := sha256.New()
-	h.Write([]byte(dialectName))
-	fmt.Fprintf(h, "table=%s;kind=%d;distinct=%v;", b.Table(), b.StmtKind(), b.Distincted())
+func PreHash[T any](b query.Builder[T], dialectName string) uint64 {
+	var h maphash.Hash
+	h.SetSeed(hashSeed)
+	h.WriteString(dialectName)
+	h.WriteByte(sepField)
+
+	h.WriteString(b.Table())
+	h.WriteByte(sepField)
+	h.WriteByte(byte(b.StmtKind()))
+	writeBool(&h, b.Distincted())
 
 	for _, s := range b.Selects() {
-		fmt.Fprintf(h, "sel=%s,%s;", s.Expr, s.Alias)
+		h.WriteString(s.Expr)
+		h.WriteByte(sepField)
+		h.WriteString(s.Alias)
+		h.WriteByte(sepField)
 	}
 	for _, j := range b.Joins() {
-		fmt.Fprintf(h, "join=%s,%s,%s;", j.Kind, j.Table, j.Alias)
-		writeBuilderExpr(h, j.Condition)
+		h.WriteString(string(j.Kind))
+		h.WriteByte(sepField)
+		h.WriteString(j.Table)
+		h.WriteByte(sepField)
+		h.WriteString(j.Alias)
+		h.WriteByte(sepField)
+		writeBuilderExpr(&h, j.Condition)
 	}
-	writeBuilderExpr(h, b.WhereExpr())
+	writeBuilderExpr(&h, b.WhereExpr())
 	for _, g := range b.GroupByCols() {
-		fmt.Fprintf(h, "group=%s;", g)
+		h.WriteString(g)
+		h.WriteByte(sepField)
 	}
-	writeBuilderExpr(h, b.HavingExpr())
+	writeBuilderExpr(&h, b.HavingExpr())
 	for _, o := range b.OrderByTerms() {
-		fmt.Fprintf(h, "order=%s,%v;", o.Column, o.Desc)
+		h.WriteString(o.Column)
+		writeBool(&h, o.Desc)
 	}
-	if b.LimitVal() != nil {
-		h.Write([]byte("limit=1;"))
-	}
-	if b.OffsetVal() != nil {
-		h.Write([]byte("offset=1;"))
-	}
+	writeBool(&h, b.LimitVal() != nil)
+	writeBool(&h, b.OffsetVal() != nil)
 	for _, a := range b.Assignments() {
-		fmt.Fprintf(h, "assign=%s;", a.Column) // column names only — never values
+		h.WriteString(a.Column) // column names only — never values
+		h.WriteByte(sepField)
 	}
-	fmt.Fprintf(h, "lock=%d;", b.LockMode())
+	h.WriteByte(byte(b.LockMode()))
 
-	return hex.EncodeToString(h.Sum(nil))
+	return h.Sum64()
 }
 
-func writeBuilderExpr(h interface{ Write([]byte) (int, error) }, e query.Expr) {
+func writeBuilderExpr(h *maphash.Hash, e query.Expr) {
 	switch v := e.(type) {
 	case nil:
-		h.Write([]byte("e:nil;"))
+		h.WriteByte(0)
 	case query.Predicate:
-		fmt.Fprintf(h, "e:pred:%s:%s;", v.Column, v.Op)
+		h.WriteByte('p')
+		h.WriteString(v.Column)
+		h.WriteByte(sepField)
+		h.WriteString(string(v.Op))
+		h.WriteByte(sepField)
 	case query.LogicalExpr:
-		fmt.Fprintf(h, "e:logic:%s(", v.Op)
+		h.WriteByte('l')
+		h.WriteString(string(v.Op))
+		h.WriteByte(sepOpen)
 		for _, c := range v.Children {
 			writeBuilderExpr(h, c)
 		}
-		h.Write([]byte(")"))
+		h.WriteByte(sepClose)
 	case query.RawExpr:
-		fmt.Fprintf(h, "e:raw:%s;", v.SQL)
+		h.WriteByte('r')
+		h.WriteString(v.SQL)
+		h.WriteByte(sepField)
 	default:
-		h.Write([]byte("e:other;"))
+		h.WriteByte('?')
 	}
 }
