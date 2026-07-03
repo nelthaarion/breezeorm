@@ -83,23 +83,7 @@ func (c *LRU[K, V]) Set(key K, value V) {
 	var evicted []entry[K, V]
 
 	c.mu.Lock()
-	if el, ok := c.items[key]; ok {
-		el.Value.(*entry[K, V]).value = value
-		c.ll.MoveToFront(el)
-	} else {
-		el := c.ll.PushFront(&entry[K, V]{key: key, value: value})
-		c.items[key] = el
-		for c.ll.Len() > c.capacity {
-			back := c.ll.Back()
-			if back == nil {
-				break
-			}
-			c.ll.Remove(back)
-			ev := back.Value.(*entry[K, V])
-			delete(c.items, ev.key)
-			evicted = append(evicted, *ev)
-		}
-	}
+	evicted = c.setLocked(key, value)
 	c.mu.Unlock()
 
 	if c.onEvict != nil {
@@ -109,6 +93,30 @@ func (c *LRU[K, V]) Set(key K, value V) {
 	}
 }
 
+func (c *LRU[K, V]) setLocked(key K, value V) []entry[K, V] {
+	if el, ok := c.items[key]; ok {
+		el.Value.(*entry[K, V]).value = value
+		c.ll.MoveToFront(el)
+		return nil
+	}
+
+	el := c.ll.PushFront(&entry[K, V]{key: key, value: value})
+	c.items[key] = el
+
+	var evicted []entry[K, V]
+	for c.ll.Len() > c.capacity {
+		back := c.ll.Back()
+		if back == nil {
+			break
+		}
+		c.ll.Remove(back)
+		ev := back.Value.(*entry[K, V])
+		delete(c.items, ev.key)
+		evicted = append(evicted, *ev)
+	}
+	return evicted
+}
+
 // GetOrCompute returns the cached value for key, computing it via compute on
 // a miss. Concurrent misses for the *same* key are coalesced — only one
 // caller actually runs compute (important when compute does real I/O, such
@@ -116,38 +124,45 @@ func (c *LRU[K, V]) Set(key K, value V) {
 // of concurrent requests for a not-yet-cached query would each independently
 // pay the round trip).
 func (c *LRU[K, V]) GetOrCompute(key K, compute func() (V, error)) (V, error) {
-	if v, ok := c.Get(key); ok {
-		return v, nil
-	}
-
 	c.mu.Lock()
 	if el, ok := c.items[key]; ok {
 		c.ll.MoveToFront(el)
 		v := el.Value.(*entry[K, V]).value
 		c.mu.Unlock()
+		c.hits.Add(1)
 		return v, nil
 	}
 	if cl, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
+		c.misses.Add(1)
 		<-cl.done
 		return cl.value, cl.err
 	}
+	c.misses.Add(1)
 	cl := &call[V]{done: make(chan struct{})}
 	c.inflight[key] = cl
 	c.mu.Unlock()
 
 	cl.value, cl.err = compute()
-	close(cl.done)
 
 	c.mu.Lock()
+	var evicted []entry[K, V]
+	if cl.err == nil {
+		evicted = c.setLocked(key, cl.value)
+	}
 	delete(c.inflight, key)
+	close(cl.done)
 	c.mu.Unlock()
 
+	if c.onEvict != nil {
+		for _, ev := range evicted {
+			c.onEvict(ev.key, ev.value)
+		}
+	}
 	if cl.err != nil {
 		var zero V
 		return zero, cl.err
 	}
-	c.Set(key, cl.value)
 	return cl.value, nil
 }
 

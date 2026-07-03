@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelthaarion/breezorm/pkg/cache"
-	"github.com/nelthaarion/breezorm/pkg/compiler"
-	"github.com/nelthaarion/breezorm/pkg/dialect"
-	ormdriver "github.com/nelthaarion/breezorm/pkg/driver"
-	"github.com/nelthaarion/breezorm/pkg/driver/sqladapter"
+	"github.com/nelthaarion/breezeorm/pkg/cache"
+	"github.com/nelthaarion/breezeorm/pkg/compiler"
+	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	ormdriver "github.com/nelthaarion/breezeorm/pkg/driver"
+	"github.com/nelthaarion/breezeorm/pkg/driver/sqladapter"
 )
 
 const (
@@ -38,6 +38,17 @@ const (
 	// connection indefinitely, which is a classic path to connection-pool
 	// exhaustion and cascading failure under load.
 	DefaultQueryTimeout = 10 * time.Second
+
+	// DefaultCacheShards is the number of independent, independently-locked
+	// shards both the plan-text cache and the prepared-statement cache are
+	// split into (see pkg/cache.ShardedLRU). Concurrent callers only contend
+	// with each other if they land in the same shard, so this trades a
+	// slightly smaller effective LRU window per shard for much lower lock
+	// contention under concurrent load — the access pattern this Executor
+	// actually sees (many goroutines repeatedly hitting a small, hot set of
+	// query shapes) is exactly the case a single global mutex serializes
+	// unnecessarily.
+	DefaultCacheShards = 32
 )
 
 // Executor owns the prepared-statement cache and SQL-text cache for one
@@ -60,13 +71,25 @@ type Executor struct {
 	// ExtractArgs, which is what makes caching the text safe: two calls with
 	// the same CacheKey but different WHERE literals correctly get the same
 	// SQL string and different, correct Args.
-	planTextCache *cache.LRU[uint64, string]
+	//
+	// Sharded (see pkg/cache.ShardedLRU) rather than a single-mutex LRU:
+	// CacheKey is already a well-distributed uint64 hash (pkg/compiler's
+	// PreHash / structuralHash), so shard selection is a cheap avalanche
+	// mix with no re-hashing of query text — see cache.Uint64Hash.
+	planTextCache *cache.ShardedLRU[uint64, string]
 
 	// stmtCache maps rendered SQL text to a prepared statement. Bounded and
 	// eviction-safe: the onEvict callback closes the statement so evicted
 	// entries don't leak server-side resources or client-side file
 	// descriptors.
-	stmtCache *cache.LRU[string, ormdriver.Stmt]
+	//
+	// Sharded for the same contention reason as planTextCache. The key
+	// remains the exact SQL string — sharding only changes which lock
+	// protects a given entry, never how entries are looked up within a
+	// shard (see cache.ShardedLRU's doc comment on why using the hash as
+	// the map key itself would be unsafe here: a collision must never
+	// return the wrong prepared statement for a query).
+	stmtCache *cache.ShardedLRU[string, ormdriver.Stmt]
 
 	defaultTimeout time.Duration
 	retry          RetryPolicy
@@ -95,12 +118,34 @@ func DefaultRetryPolicy() RetryPolicy {
 // Option configures an Executor at construction time.
 type Option func(*Executor)
 
+// WithStmtCacheSize replaces the prepared-statement cache with one sized to
+// n total entries, split across DefaultCacheShards shards. Use
+// WithStmtCache to control shard count directly.
 func WithStmtCacheSize(n int) Option {
-	return func(ex *Executor) { ex.stmtCache = newStmtCache(n) }
+	return func(ex *Executor) { ex.stmtCache = newStmtCache(n, DefaultCacheShards) }
 }
 
+// WithStmtCache replaces the prepared-statement cache with one sized to n
+// total entries split across numShards shards.
+func WithStmtCache(n, numShards int) Option {
+	return func(ex *Executor) { ex.stmtCache = newStmtCache(n, numShards) }
+}
+
+// WithPlanCacheSize replaces the plan-text cache with one sized to n total
+// entries, split across DefaultCacheShards shards. Use WithPlanCache to
+// control shard count directly.
 func WithPlanCacheSize(n int) Option {
-	return func(ex *Executor) { ex.planTextCache = cache.NewLRU[uint64, string](n, nil) }
+	return func(ex *Executor) {
+		ex.planTextCache = cache.NewShardedLRU[uint64, string](n, DefaultCacheShards, cache.Uint64Hash, nil)
+	}
+}
+
+// WithPlanCache replaces the plan-text cache with one sized to n total
+// entries split across numShards shards.
+func WithPlanCache(n, numShards int) Option {
+	return func(ex *Executor) {
+		ex.planTextCache = cache.NewShardedLRU[uint64, string](n, numShards, cache.Uint64Hash, nil)
+	}
 }
 
 func WithDefaultTimeout(d time.Duration) Option {
@@ -111,8 +156,8 @@ func WithRetryPolicy(p RetryPolicy) Option {
 	return func(ex *Executor) { ex.retry = p }
 }
 
-func newStmtCache(size int) *cache.LRU[string, ormdriver.Stmt] {
-	return cache.NewLRU[string, ormdriver.Stmt](size, func(_ string, stmt ormdriver.Stmt) {
+func newStmtCache(size, numShards int) *cache.ShardedLRU[string, ormdriver.Stmt] {
+	return cache.NewShardedLRU[string, ormdriver.Stmt](size, numShards, cache.StringHash, func(_ string, stmt ormdriver.Stmt) {
 		_ = stmt.Close() // best-effort: nothing actionable if this fails at eviction time
 	})
 }
@@ -125,14 +170,14 @@ func New(db *sql.DB, d dialect.Dialect, opts ...Option) *Executor {
 }
 
 // NewWithDriver creates an Executor bound to any ormdriver.DB implementation
-// — the general constructor. Use this when backing breezorm with something
+// — the general constructor. Use this when backing Breeze ORM with something
 // other than database/sql once such an adapter exists.
 func NewWithDriver(db ormdriver.DB, d dialect.Dialect, opts ...Option) *Executor {
 	ex := &Executor{
 		db:             db,
 		dialect:        d,
-		planTextCache:  cache.NewLRU[uint64, string](DefaultPlanCacheSize, nil),
-		stmtCache:      newStmtCache(DefaultStmtCacheSize),
+		planTextCache:  cache.NewShardedLRU[uint64, string](DefaultPlanCacheSize, DefaultCacheShards, cache.Uint64Hash, nil),
+		stmtCache:      newStmtCache(DefaultStmtCacheSize, DefaultCacheShards),
 		defaultTimeout: DefaultQueryTimeout,
 		retry:          DefaultRetryPolicy(),
 	}
@@ -188,9 +233,9 @@ func (ex *Executor) Resolve(cq *compiler.CompiledQuery) (*GeneratedSQL, error) {
 
 // prepare returns a cached prepared statement for the given SQL text,
 // preparing it on first use. Concurrent misses for identical SQL text are
-// coalesced (see cache.LRU.GetOrCompute), so a burst of concurrent
-// first-time callers for the same new query shape triggers exactly one
-// PrepareContext round trip.
+// coalesced within that text's shard (see cache.ShardedLRU.GetOrCompute /
+// cache.LRU.GetOrCompute), so a burst of concurrent first-time callers for
+// the same new query shape triggers exactly one PrepareContext round trip.
 func (ex *Executor) prepare(ctx context.Context, sqlText string) (ormdriver.Stmt, error) {
 	return ex.stmtCache.GetOrCompute(sqlText, func() (ormdriver.Stmt, error) {
 		return ex.db.PrepareContext(ctx, sqlText)

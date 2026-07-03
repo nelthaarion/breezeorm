@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nelthaarion/breezorm/pkg/dialect"
-	"github.com/nelthaarion/breezorm/pkg/planner"
-	"github.com/nelthaarion/breezorm/pkg/pool"
-	"github.com/nelthaarion/breezorm/pkg/query"
+	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	"github.com/nelthaarion/breezeorm/pkg/planner"
+	"github.com/nelthaarion/breezeorm/pkg/pool"
+	"github.com/nelthaarion/breezeorm/pkg/query"
 )
 
 // GeneratedSQL is the rendered statement plus its positional bind arguments,
@@ -85,8 +85,21 @@ func ExtractArgs(pp *planner.PhysicalPlan) ([]any, error) {
 	c := &argCollector{}
 	switch root.Kind {
 	case planner.NodeInsert, planner.NodeUpsert:
+		// Exact-size preallocation: an INSERT/UPSERT's bind-arg count is
+		// precisely len(Assignments) — one value per column, no predicate
+		// or IN()-expansion involved. Without this, ExtractArgs (which runs
+		// on *every* Resolve call once the SQL text is cached — see
+		// Executor.Resolve) built this slice via bare append from a nil
+		// slice, costing 3 grow-and-copy reallocations (cap 1→2→4) for a
+		// typical 4-column INSERT instead of the 1 allocation this does.
+		c.args = make([]any, 0, len(root.Assignments))
 		c.assignments(root.Assignments)
 	case planner.NodeUpdate:
+		// Lower-bound preallocation: at least len(Assignments) values are
+		// always bound (the SET list); the WHERE predicate adds more, but
+		// starting from this floor instead of nil still avoids the first
+		// couple of grow-and-copy steps for the common case.
+		c.args = make([]any, 0, len(root.Assignments))
 		c.assignments(root.Assignments)
 		c.expr(root.Predicate)
 	case planner.NodeDelete:
@@ -94,6 +107,7 @@ func ExtractArgs(pp *planner.PhysicalPlan) ([]any, error) {
 	default:
 		var parts selectParts
 		flatten(root, &parts)
+		c.args = make([]any, 0, exprArgCount(parts.where)+exprArgCount(parts.having)+joinArgCount(parts.joins))
 		for _, j := range parts.joins {
 			c.expr(j.JoinOn)
 		}
@@ -101,6 +115,43 @@ func ExtractArgs(pp *planner.PhysicalPlan) ([]any, error) {
 		c.expr(parts.having)
 	}
 	return c.args, c.err
+}
+
+func joinArgCount(joins []*planner.LogicalNode) int {
+	n := 0
+	for _, j := range joins {
+		n += exprArgCount(j.JoinOn)
+	}
+	return n
+}
+
+func exprArgCount(e query.Expr) int {
+	switch v := e.(type) {
+	case nil:
+		return 0
+	case query.Predicate:
+		switch v.Op {
+		case query.OpIsNull, query.OpIsNotNull:
+			return 0
+		case query.OpIn, query.OpNotIn:
+			vals, _ := v.Value.([]any)
+			return len(vals)
+		case query.OpBetween:
+			return 2
+		default:
+			return 1
+		}
+	case query.LogicalExpr:
+		n := 0
+		for _, ch := range v.Children {
+			n += exprArgCount(ch)
+		}
+		return n
+	case query.RawExpr:
+		return len(v.Args)
+	default:
+		return 0
+	}
 }
 
 type sqlGen struct {
@@ -224,7 +275,9 @@ func (g *sqlGen) genSelect(root *planner.LogicalNode, pp *planner.PhysicalPlan) 
 			}
 			g.b.WriteString(g.quoteIdent(c.Name))
 			if len(c.Columns) > 0 {
-				g.b.WriteString(" (" + strings.Join(g.quoteIdents(c.Columns), ", ") + ")")
+				g.b.WriteString(" (")
+				g.b.WriteString(strings.Join(g.quoteIdents(c.Columns), ", "))
+				g.b.WriteString(")")
 			}
 			g.b.WriteString(" AS (...)") // nested builder SQL generation wired in pkg/orm
 		}
@@ -245,7 +298,8 @@ func (g *sqlGen) genSelect(root *planner.LogicalNode, pp *planner.PhysicalPlan) 
 			g.checkRawFragment(p.Expr)
 			g.b.WriteString(p.Expr)
 			if p.Alias != "" {
-				g.b.WriteString(" AS " + g.quoteIdent(p.Alias))
+				g.b.WriteString(" AS ")
+				g.b.WriteString(g.quoteIdent(p.Alias))
 			}
 		}
 	}
@@ -259,7 +313,8 @@ func (g *sqlGen) genSelect(root *planner.LogicalNode, pp *planner.PhysicalPlan) 
 		g.b.WriteString(" ")
 		g.b.WriteString(g.quoteIdent(j.Table))
 		if j.Alias != "" {
-			g.b.WriteString(" AS " + g.quoteIdent(j.Alias))
+			g.b.WriteString(" AS ")
+			g.b.WriteString(g.quoteIdent(j.Alias))
 		}
 		if j.JoinOn != nil {
 			g.b.WriteString(" ON ")
@@ -306,11 +361,13 @@ func (g *sqlGen) genSelect(root *planner.LogicalNode, pp *planner.PhysicalPlan) 
 	}
 
 	if lo := g.d.LimitOffset(parts.limit, parts.offset); lo != "" {
-		g.b.WriteString(" " + lo)
+		g.b.WriteString(" ")
+		g.b.WriteString(lo)
 	}
 
 	if lock := g.d.LockClause(parts.lock); lock != "" {
-		g.b.WriteString(" " + lock)
+		g.b.WriteString(" ")
+		g.b.WriteString(lock)
 	}
 }
 
@@ -332,7 +389,8 @@ func (g *sqlGen) genInsert(n *planner.LogicalNode) {
 	}
 	g.b.WriteString(")")
 	if ret := g.d.ReturningClause([]string{"*"}); ret != "" {
-		g.b.WriteString(" " + ret)
+		g.b.WriteString(" ")
+		g.b.WriteString(ret)
 	}
 }
 
@@ -353,7 +411,8 @@ func (g *sqlGen) genUpdate(n *planner.LogicalNode) {
 		g.writeExpr(n.Predicate)
 	}
 	if ret := g.d.ReturningClause([]string{"*"}); ret != "" {
-		g.b.WriteString(" " + ret)
+		g.b.WriteString(" ")
+		g.b.WriteString(ret)
 	}
 }
 
@@ -395,10 +454,15 @@ func (g *sqlGen) writePredicate(p query.Predicate) {
 	col := g.quoteIdent(p.Column)
 	switch p.Op {
 	case query.OpIsNull, query.OpIsNotNull:
-		g.b.WriteString(col + " " + string(p.Op))
+		g.b.WriteString(col)
+		g.b.WriteString(" ")
+		g.b.WriteString(string(p.Op))
 	case query.OpIn, query.OpNotIn:
 		vals, _ := p.Value.([]any)
-		g.b.WriteString(col + " " + string(p.Op) + " (")
+		g.b.WriteString(col)
+		g.b.WriteString(" ")
+		g.b.WriteString(string(p.Op))
+		g.b.WriteString(" (")
 		for i, v := range vals {
 			if i > 0 {
 				g.b.WriteString(", ")
@@ -408,9 +472,17 @@ func (g *sqlGen) writePredicate(p query.Predicate) {
 		g.b.WriteString(")")
 	case query.OpBetween:
 		pair, _ := p.Value.([2]any)
-		g.b.WriteString(col + " BETWEEN " + g.bind(pair[0]) + " AND " + g.bind(pair[1]))
+		g.b.WriteString(col)
+		g.b.WriteString(" BETWEEN ")
+		g.b.WriteString(g.bind(pair[0]))
+		g.b.WriteString(" AND ")
+		g.b.WriteString(g.bind(pair[1]))
 	default:
-		g.b.WriteString(col + " " + string(p.Op) + " " + g.bind(p.Value))
+		g.b.WriteString(col)
+		g.b.WriteString(" ")
+		g.b.WriteString(string(p.Op))
+		g.b.WriteString(" ")
+		g.b.WriteString(g.bind(p.Value))
 	}
 }
 
@@ -424,7 +496,9 @@ func (g *sqlGen) writeLogical(le query.LogicalExpr) {
 	g.b.WriteString("(")
 	for i, c := range le.Children {
 		if i > 0 {
-			g.b.WriteString(" " + string(le.Op) + " ")
+			g.b.WriteString(" ")
+			g.b.WriteString(string(le.Op))
+			g.b.WriteString(" ")
 		}
 		g.writeExpr(c)
 	}

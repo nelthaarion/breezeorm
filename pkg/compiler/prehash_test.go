@@ -3,7 +3,7 @@ package compiler
 import (
 	"testing"
 
-	"github.com/nelthaarion/breezorm/pkg/query"
+	"github.com/nelthaarion/breezeorm/pkg/query"
 )
 
 type prehashWidget struct {

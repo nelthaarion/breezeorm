@@ -2,16 +2,19 @@ package orm
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 
-	"github.com/nelthaarion/breezorm/pkg/compiler"
-	"github.com/nelthaarion/breezorm/pkg/dialect"
-	"github.com/nelthaarion/breezorm/pkg/execution"
-	"github.com/nelthaarion/breezorm/pkg/metadata"
-	"github.com/nelthaarion/breezorm/pkg/query"
-	"github.com/nelthaarion/breezorm/pkg/scanner"
-	"github.com/nelthaarion/breezorm/pkg/transaction"
+	"github.com/nelthaarion/breezeorm/pkg/compiler"
+	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	"github.com/nelthaarion/breezeorm/pkg/execution"
+	"github.com/nelthaarion/breezeorm/pkg/metadata"
+	"github.com/nelthaarion/breezeorm/pkg/planner"
+	"github.com/nelthaarion/breezeorm/pkg/query"
+	"github.com/nelthaarion/breezeorm/pkg/scanner"
+	"github.com/nelthaarion/breezeorm/pkg/transaction"
 )
 
 // Query is the public, generic fluent query type. Every builder method
@@ -106,20 +109,30 @@ func compileCached[T any](ctx context.Context, db *DB, b query.Builder[T]) (*com
 
 // --- terminal read operations -----------------------------------------------
 
-// Find executes the query and returns all matching rows.
-func (q *Query[T]) Find(ctx context.Context) ([]T, error) {
-	cq, err := q.compile(ctx)
+// queryAndPlan runs compile→resolve→execute and returns the open *Rows plus
+// the scan Plan for them, for both Find (ScanAllHint) and First (ScanOne) to
+// share — the only difference between the two is which scanner function
+// consumes the result.
+func (q *Query[T]) queryAndPlan(ctx context.Context) (*compiler.CompiledQuery, *execution.Rows, *scanner.Plan, error) {
+	return q.queryAndPlanBuilder(ctx, q.b)
+}
+
+func (q *Query[T]) queryAndPlanBuilder(ctx context.Context, b query.Builder[T]) (*compiler.CompiledQuery, *execution.Rows, *scanner.Plan, error) {
+	if q.table == nil {
+		return nil, nil, nil, fmt.Errorf("orm: model type not compilable (check struct tags)")
+	}
+	cq, err := compileCached(ctx, q.db, b)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	gen, err := q.db.executor.Resolve(cq)
 	if err != nil {
-		return nil, fmt.Errorf("orm: generate SQL: %w", err)
+		return nil, nil, nil, fmt.Errorf("orm: generate SQL: %w", err)
 	}
 
 	rows, err := q.db.executor.Query(ctx, gen)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	// Reuse the CompiledQuery's CacheKey (already computed by q.compile
@@ -133,29 +146,67 @@ func (q *Query[T]) Find(ctx context.Context) ([]T, error) {
 		cols, err := rows.Columns()
 		if err != nil {
 			rows.Close()
-			return nil, err
+			return nil, nil, nil, err
 		}
 		plan, err = scanner.Compile(q.table, cols)
 		if err != nil {
 			rows.Close()
-			return nil, err
+			return nil, nil, nil, err
 		}
 		q.db.scanPlanCache.Set(cq.CacheKey, plan)
 	}
-	return scanner.ScanAll[T](rows, plan)
+	return cq, rows, plan, nil
 }
 
-// First executes the query with an implicit LIMIT 1 and returns a single
-// result, or (nil, sql.ErrNoRows)-equivalent when nothing matches.
-func (q *Query[T]) First(ctx context.Context) (*T, error) {
-	results, err := q.Limit(1).Find(ctx)
+// Find executes the query and returns all matching rows.
+func (q *Query[T]) Find(ctx context.Context) ([]T, error) {
+	cq, rows, plan, err := q.queryAndPlan(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(results) == 0 {
-		return nil, fmt.Errorf("orm: no rows found")
+	return scanner.ScanAllHint[T](rows, plan, resultSizeHint(cq.Physical))
+}
+
+// resultSizeHint walks a (cached, already-built) physical plan's node tree
+// looking for a NodeLimit, and returns its Limit value as a pre-sizing hint
+// for scanner.ScanAllHint — e.g. Limit(50) means "at most 50 rows are
+// coming back", so ScanAll's blind cap-16 default (which would otherwise
+// force two extra reallocate+copy cycles growing 16→32→64) can be skipped
+// entirely. This walk itself is cheap: cq.Physical is already built and
+// cached by cq.CacheKey (see compileCached), so this is just following a
+// handful of pointers, not a page of query-building work, on every call.
+// Returns 0 (→ ScanAllHint's own default) when there's no LIMIT, or the
+// query isn't a plain read (Root is nil for INSERT/UPDATE/DELETE bodies
+// that don't reach this code path anyway).
+func resultSizeHint(pp *planner.PhysicalPlan) int {
+	if pp == nil || pp.Logical == nil {
+		return 0
 	}
-	return &results[0], nil
+	for n := pp.Logical.Root; n != nil; n = n.Input {
+		if n.Kind == planner.NodeLimit && n.Limit != nil {
+			return int(*n.Limit)
+		}
+	}
+	return 0
+}
+
+// First executes the query with an implicit LIMIT 1 and returns a single
+// result, or an "orm: no rows found" error when nothing matches. Scans
+// directly into *T via scanner.ScanOne — no intermediate []T slice, unlike
+// the old Find(ctx)+index[0] implementation.
+func (q *Query[T]) First(ctx context.Context) (*T, error) {
+	_, rows, plan, err := q.queryAndPlanBuilder(ctx, q.b.Limit(1))
+	if err != nil {
+		return nil, err
+	}
+	v, err := scanner.ScanOne[T](rows, plan)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("orm: no rows found")
+		}
+		return nil, err
+	}
+	return v, nil
 }
 
 // Count returns the number of rows matching the current WHERE clause.

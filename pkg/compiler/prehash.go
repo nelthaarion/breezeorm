@@ -3,7 +3,7 @@ package compiler
 import (
 	"hash/maphash"
 
-	"github.com/nelthaarion/breezorm/pkg/query"
+	"github.com/nelthaarion/breezeorm/pkg/query"
 )
 
 // PreHash computes a structural cache key directly from a query.Builder's
@@ -73,8 +73,8 @@ func PreHash[T any](b query.Builder[T], dialectName string) uint64 {
 		h.WriteString(o.Column)
 		writeBool(&h, o.Desc)
 	}
-	writeBool(&h, b.LimitVal() != nil)
-	writeBool(&h, b.OffsetVal() != nil)
+	writeBool(&h, b.HasLimit())
+	writeBool(&h, b.HasOffset())
 	for _, a := range b.Assignments() {
 		h.WriteString(a.Column) // column names only — never values
 		h.WriteByte(sepField)

@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/nelthaarion/breezorm/pkg/planner"
+	"github.com/nelthaarion/breezeorm/pkg/planner"
 )
 
 // MultiTenancy injects a tenant-scoping predicate on every query, analogous

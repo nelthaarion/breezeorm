@@ -1,6 +1,6 @@
 package query
 
-import "github.com/nelthaarion/breezorm/pkg/dialect"
+import "github.com/nelthaarion/breezeorm/pkg/dialect"
 
 // PreloadSpec describes an eager-load / preload request, potentially nested
 // (e.g. "Posts.Comments.Author") and conditional (extra Where applied to the
@@ -43,9 +43,23 @@ type Builder[T any] struct {
 	where    Expr
 	groupBy  []string
 	having   Expr
-	orderBy  []OrderTerm
-	limit    *int64
-	offset   *int64
+	orderBy []OrderTerm
+
+	// limit/offset are stored as value+flag rather than *int64 so that
+	// Limit(n)/Offset(n) — called on essentially every read query, e.g. via
+	// First()'s implicit Limit(1) — don't heap-allocate a pointer on every
+	// single call. LimitVal()/OffsetVal() still hand back *int64 (unchanged
+	// external API, still nil when unset) by materializing a pointer lazily,
+	// but that only happens on the planner.Build path, which runs once per
+	// distinct query *shape* thanks to DB.compiledCache — not once per call.
+	// PreHash (which DOES run on every call, hit or miss, since it's the
+	// cache lookup key) uses HasLimit()/HasOffset() instead of LimitVal() !=
+	// nil for exactly this reason — see compiler/prehash.go.
+	hasLimit  bool
+	limitN    int64
+	hasOffset bool
+	offsetN   int64
+
 	ctes     []CTE
 	unions   []unionClause
 	preloads []PreloadSpec
@@ -155,13 +169,15 @@ func (b Builder[T]) OrderBy(terms ...OrderTerm) Builder[T] {
 
 func (b Builder[T]) Limit(n int64) Builder[T] {
 	c := b.clone()
-	c.limit = &n
+	c.hasLimit = true
+	c.limitN = n
 	return c
 }
 
 func (b Builder[T]) Offset(n int64) Builder[T] {
 	c := b.clone()
-	c.offset = &n
+	c.hasOffset = true
+	c.offsetN = n
 	return c
 }
 
@@ -273,8 +289,20 @@ func (b Builder[T]) WhereExpr() Expr            { return b.where }
 func (b Builder[T]) GroupByCols() []string      { return b.groupBy }
 func (b Builder[T]) HavingExpr() Expr           { return b.having }
 func (b Builder[T]) OrderByTerms() []OrderTerm  { return b.orderBy }
-func (b Builder[T]) LimitVal() *int64           { return b.limit }
-func (b Builder[T]) OffsetVal() *int64          { return b.offset }
+func (b Builder[T]) LimitVal() *int64 {
+	if !b.hasLimit {
+		return nil
+	}
+	n := b.limitN
+	return &n
+}
+func (b Builder[T]) OffsetVal() *int64 {
+	if !b.hasOffset {
+		return nil
+	}
+	n := b.offsetN
+	return &n
+}
 func (b Builder[T]) CTEs() []CTE                { return b.ctes }
 func (b Builder[T]) Preloads() []PreloadSpec    { return b.preloads }
 func (b Builder[T]) LockMode() dialect.LockMode { return b.lock }
@@ -284,3 +312,10 @@ func (b Builder[T]) UpsertConflict() dialect.UpsertConflictTarget {
 }
 func (b Builder[T]) UpsertUpdateCols() []string { return b.upsertUpdateCols }
 func (b Builder[T]) CursorAfter() any           { return b.cursorAfter }
+
+// HasLimit/HasOffset report whether Limit/Offset were set, without paying
+// for LimitVal()/OffsetVal()'s pointer allocation. compiler.PreHash — which
+// runs on every Find/First/UpdateAll/Delete call, cache hit or miss — only
+// ever needs the yes/no, so it uses these instead.
+func (b Builder[T]) HasLimit() bool  { return b.hasLimit }
+func (b Builder[T]) HasOffset() bool { return b.hasOffset }

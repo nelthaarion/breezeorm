@@ -1,3 +1,3 @@
-module github.com/nelthaarion/breezorm
+module github.com/nelthaarion/breezeorm
 
 go 1.21

@@ -33,6 +33,16 @@ func (Postgres) ReturningClause(columns []string) string {
 	quoted := make([]string, len(columns))
 	p := Postgres{}
 	for i, c := range columns {
+		if c == "*" {
+			// "*" is the wildcard, not an identifier — quoting it produces
+			// RETURNING "*", which Postgres parses as a column literally
+			// named *, not "all columns" (SQLSTATE 42703: column "*" does
+			// not exist). Every other caller passes real column names,
+			// which do need quoting, so this only special-cases the
+			// wildcard sqlgen.go passes for "RETURNING everything".
+			quoted[i] = c
+			continue
+		}
 		quoted[i] = p.QuoteIdentifier(c)
 	}
 	return "RETURNING " + strings.Join(quoted, ", ")

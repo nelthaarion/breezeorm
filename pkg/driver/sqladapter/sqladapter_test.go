@@ -8,7 +8,7 @@ import (
 	"io"
 	"testing"
 
-	ormdriver "github.com/nelthaarion/breezorm/pkg/driver"
+	ormdriver "github.com/nelthaarion/breezeorm/pkg/driver"
 )
 
 // Minimal in-memory database/sql/driver fake, mirroring the one in

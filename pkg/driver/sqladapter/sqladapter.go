@@ -11,7 +11,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/nelthaarion/breezorm/pkg/driver"
+	"github.com/nelthaarion/breezeorm/pkg/driver"
 )
 
 // Wrap adapts db to driver.DB.

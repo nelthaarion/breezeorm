@@ -103,9 +103,9 @@ var registerFakeDriverOnce sync.Once
 
 func openFakeDB() *sql.DB {
 	registerFakeDriverOnce.Do(func() {
-		sql.Register("breezorm_fake_test_driver", fakeDriver{})
+		sql.Register("breezeorm_fake_test_driver", fakeDriver{})
 	})
-	db, err := sql.Open("breezorm_fake_test_driver", "test")
+	db, err := sql.Open("breezeorm_fake_test_driver", "test")
 	if err != nil {
 		panic(err) // test-only helper; a failure here is a test bug, not a runtime condition
 	}

@@ -103,8 +103,16 @@ var globalRegistry = &registry{entries: make(map[reflect.Type]*entry)}
 // every subsequent call (from any goroutine) is a lock-free map read
 // followed by returning the cached, immutable *Table.
 func Compile[T any]() (*Table, error) {
-	var zero T
-	t := reflect.TypeOf(zero)
+	// reflect.TypeOf((*T)(nil)).Elem() instead of reflect.TypeOf(zero-value-T):
+	// converting a *T (even a nil one) to `any` is a free pointer-shaped
+	// interface conversion, whereas boxing a zero-value T directly would
+	// heap-allocate a full copy of T just to read its type descriptor — on
+	// every single Compile[T]() call, i.e. every Model[T](db), even though
+	// the *Table lookup below is otherwise a cached, allocation-free map
+	// read. The pointer/value stripping loop right after already handles
+	// T itself being a pointer type, so starting one level higher (*T) here
+	// doesn't change what type ultimately gets looked up.
+	t := reflect.TypeOf((*T)(nil)).Elem()
 	for t != nil && t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}

@@ -34,6 +34,12 @@ func (SQLite) ReturningClause(columns []string) string {
 	s := SQLite{}
 	quoted := make([]string, len(columns))
 	for i, c := range columns {
+		if c == "*" {
+			// see the identical guard + comment in postgres.go's
+			// ReturningClause: "*" is the wildcard, not an identifier.
+			quoted[i] = c
+			continue
+		}
 		quoted[i] = s.QuoteIdentifier(c)
 	}
 	return "RETURNING " + strings.Join(quoted, ", ")

@@ -35,6 +35,13 @@ func (SQLServer) ReturningClause(columns []string) string {
 	s := SQLServer{}
 	quoted := make([]string, len(columns))
 	for i, c := range columns {
+		if c == "*" {
+			// see the identical guard + comment in postgres.go's
+			// ReturningClause: "*" is the wildcard, not an identifier —
+			// T-SQL wants INSERTED.*, not INSERTED.[*].
+			quoted[i] = "INSERTED.*"
+			continue
+		}
 		quoted[i] = "INSERTED." + s.QuoteIdentifier(c)
 	}
 	return "OUTPUT " + strings.Join(quoted, ", ")

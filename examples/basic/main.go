@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nelthaarion/breezorm/pkg/compiler"
-	"github.com/nelthaarion/breezorm/pkg/dialect"
-	"github.com/nelthaarion/breezorm/pkg/execution"
-	"github.com/nelthaarion/breezorm/pkg/optimizer"
-	"github.com/nelthaarion/breezorm/pkg/query"
+	"github.com/nelthaarion/breezeorm/pkg/compiler"
+	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	"github.com/nelthaarion/breezeorm/pkg/execution"
+	"github.com/nelthaarion/breezeorm/pkg/optimizer"
+	"github.com/nelthaarion/breezeorm/pkg/query"
 )
 
 // User is a model. Struct tags drive the metadata compiler.

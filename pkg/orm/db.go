@@ -12,13 +12,13 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/nelthaarion/breezorm/pkg/cache"
-	"github.com/nelthaarion/breezorm/pkg/compiler"
-	"github.com/nelthaarion/breezorm/pkg/dialect"
-	"github.com/nelthaarion/breezorm/pkg/execution"
-	"github.com/nelthaarion/breezorm/pkg/optimizer"
-	"github.com/nelthaarion/breezorm/pkg/plugins"
-	"github.com/nelthaarion/breezorm/pkg/scanner"
+	"github.com/nelthaarion/breezeorm/pkg/cache"
+	"github.com/nelthaarion/breezeorm/pkg/compiler"
+	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	"github.com/nelthaarion/breezeorm/pkg/execution"
+	"github.com/nelthaarion/breezeorm/pkg/optimizer"
+	"github.com/nelthaarion/breezeorm/pkg/plugins"
+	"github.com/nelthaarion/breezeorm/pkg/scanner"
 )
 
 // DefaultCompiledQueryCacheSize bounds DB.compiledCache. See the CAVEAT on
@@ -49,17 +49,25 @@ type DB struct {
 	// before; only the downstream SQL-text/prepared-statement caches in
 	// Executor were actually warm. Benchmarked: this cache is what makes
 	// "compile once, execute forever" true for this layer too.
-	compiledCache *cache.LRU[uint64, *compiler.CompiledQuery]
+	//
+	// Sharded (see pkg/cache.ShardedLRU): this Get happens on every single
+	// Find/Create/UpdateAll/Delete call, from every caller goroutine — under
+	// concurrent load a single-mutex LRU here serializes unrelated
+	// goroutines issuing completely different query shapes against each
+	// other for no reason. PreHash already produces a well-distributed
+	// uint64, so sharding is a cheap avalanche mix (cache.Uint64Hash), not a
+	// re-hash of anything.
+	compiledCache *cache.ShardedLRU[uint64, *compiler.CompiledQuery]
 
 	// scanPlanCache caches *scanner.Plan (which result columns map to which
 	// struct field, via precomputed offsets) keyed by (table, column list).
-	// This was the actual root cause of breezorm trailing GORM/Bun/sqlx on
+	// This was the actual root cause of Breeze ORM trailing GORM/Bun/sqlx on
 	// reads in benchmarking: pkg/scanner.Compile was being called fresh on
 	// every single Find call — for a fixed query shape, the result column
 	// list never changes, so the Plan it produces never changes either.
 	// Same "compile once" principle as compiledCache, one layer further
-	// down the pipeline.
-	scanPlanCache *cache.LRU[uint64, *scanner.Plan]
+	// down the pipeline. Sharded for the same contention reason.
+	scanPlanCache *cache.ShardedLRU[uint64, *scanner.Plan]
 }
 
 // Option configures a DB at Open time.
@@ -91,13 +99,17 @@ func WithExecutorOptions(opts ...execution.Option) Option {
 // (default DefaultCompiledQueryCacheSize). Size for the number of distinct
 // query *shapes* your application issues, not the number of requests.
 func WithCompiledQueryCacheSize(n int) Option {
-	return func(db *DB) { db.compiledCache = cache.NewLRU[uint64, *compiler.CompiledQuery](n, nil) }
+	return func(db *DB) {
+		db.compiledCache = cache.NewShardedLRU[uint64, *compiler.CompiledQuery](n, execution.DefaultCacheShards, cache.Uint64Hash, nil)
+	}
 }
 
 // WithScanPlanCacheSize overrides the bound on the scan-plan cache (default
 // DefaultScanPlanCacheSize).
 func WithScanPlanCacheSize(n int) Option {
-	return func(db *DB) { db.scanPlanCache = cache.NewLRU[uint64, *scanner.Plan](n, nil) }
+	return func(db *DB) {
+		db.scanPlanCache = cache.NewShardedLRU[uint64, *scanner.Plan](n, execution.DefaultCacheShards, cache.Uint64Hash, nil)
+	}
 }
 
 // Open wraps an already-configured *sql.DB (the caller chooses and imports
@@ -105,11 +117,13 @@ func WithScanPlanCacheSize(n int) Option {
 // dependencies) with the given dialect.
 func Open(sqlDB *sql.DB, d dialect.Dialect, opts ...Option) *DB {
 	db := &DB{
-		sqlDB:         sqlDB,
-		dialect:       d,
-		passes:        optimizer.DefaultPipeline(),
-		compiledCache: cache.NewLRU[uint64, *compiler.CompiledQuery](DefaultCompiledQueryCacheSize, nil),
-		scanPlanCache: cache.NewLRU[uint64, *scanner.Plan](DefaultScanPlanCacheSize, nil),
+		sqlDB:   sqlDB,
+		dialect: d,
+		passes:  optimizer.DefaultPipeline(),
+		compiledCache: cache.NewShardedLRU[uint64, *compiler.CompiledQuery](
+			DefaultCompiledQueryCacheSize, execution.DefaultCacheShards, cache.Uint64Hash, nil),
+		scanPlanCache: cache.NewShardedLRU[uint64, *scanner.Plan](
+			DefaultScanPlanCacheSize, execution.DefaultCacheShards, cache.Uint64Hash, nil),
 	}
 	for _, o := range opts {
 		o(db)

@@ -1,4 +1,4 @@
-# breezorm
+# Breeze ORM
 
 A from-scratch Go ORM/database engine scaffold: metadata compiler → query
 compiler → logical planner → optimizer → physical planner → SQL generator →
@@ -175,7 +175,7 @@ broader scope than what's actually in this zip.
   with `hash/maphash`+direct `WriteString`/`WriteByte` in both structural-hash
   functions — `PreHash` was costing 10.9% of total per-query CPU time on a
   cache *lookup key*, confirmed by `go tool pprof`, cut to 1.2%. Net effect:
-  breezorm's Insert became the fastest of all four ORMs benchmarked, and it
+  Breeze ORM's Insert became the fastest of all four ORMs benchmarked, and it
   now allocates less than GORM on every operation. Reads (FindByID,
   SelectWhereLimit) are still the slowest of the four in wall-clock time —
   see `benchmark/README.md` for the profiled reason why (per-row
@@ -198,9 +198,9 @@ broader scope than what's actually in this zip.
 
 
 
-See `benchmark/` — a separate Go module (kept separate so breezorm itself stays
+See `benchmark/` — a separate Go module (kept separate so Breeze ORM itself stays
 dependency-free) with real, runnable benchmarks against real dependencies.
-breezorm wins or ties GORM/Bun on Insert and Update; is currently 1.5-2x
+Breeze ORM wins or ties GORM/Bun on Insert and Update; is currently 1.5-2x
 slower than GORM/Bun/sqlx on reads (FindByID, SelectWhereLimit), a gap this
 benchmark run diagnosed precisely: `pkg/scanner.Compile` rebuilds its scan
 plan on every `Find` call instead of being cached, the same bug the

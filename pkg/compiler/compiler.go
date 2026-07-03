@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"hash/maphash"
 
-	"github.com/nelthaarion/breezorm/pkg/dialect"
-	"github.com/nelthaarion/breezorm/pkg/optimizer"
-	"github.com/nelthaarion/breezorm/pkg/planner"
-	"github.com/nelthaarion/breezorm/pkg/plugins"
-	"github.com/nelthaarion/breezorm/pkg/query"
+	"github.com/nelthaarion/breezeorm/pkg/dialect"
+	"github.com/nelthaarion/breezeorm/pkg/optimizer"
+	"github.com/nelthaarion/breezeorm/pkg/planner"
+	"github.com/nelthaarion/breezeorm/pkg/plugins"
+	"github.com/nelthaarion/breezeorm/pkg/query"
 )
 
 // CompiledQuery is the immutable output of the compilation pipeline, ready

@@ -8,7 +8,7 @@ package plugins
 import (
 	"context"
 
-	"github.com/nelthaarion/breezorm/pkg/planner"
+	"github.com/nelthaarion/breezeorm/pkg/planner"
 )
 
 // Plugin is the extension point contract. Every method has a no-op default
