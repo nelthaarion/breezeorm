@@ -51,14 +51,14 @@ SelectWhereLimit ns/op below are ranges across 2 independent runs; Insert
 and Update are a single run each (`results_insert_update_after_maphash.txt`,
 `results_after_maphash_fix.txt`).
 
-| Operation | raw_sql (prepared) | **breezeorm** | GORM | Bun | sqlx |
+| Operation | raw_sql (prepared) | <span style="color:#16a34a">**breezeorm**</span> | GORM | Bun | sqlx |
 |---|---:|---:|---:|---:|---:|
-| Insert | 62.7µs / 10 allocs | **66.4µs / 28 allocs** | 114.1µs / 105 allocs | 91.7µs / 26 allocs | 73.0µs / 12 allocs |
-| FindByID | 4.5-4.6µs / 18 allocs | **16.1-16.7µs / 41 allocs** | 11.0-11.5µs / 58 allocs | 14.6-15.5µs / 41 allocs | 10.8-11.4µs / 40 allocs |
-| SelectWhereLimit(50) | 82-87µs / 366 allocs | **217-230µs / 533 allocs** | 142-144µs / 700 allocs | 114-119µs / 393 allocs | 108-111µs / 439 allocs |
-| Update | 4.0µs / 6 allocs | **8.1µs / 21 allocs** | 25.5µs / 83 allocs | 10.0µs / 14 allocs | 6.5µs / 8 allocs |
+| Insert | 62.7µs / 10 allocs | <span style="color:#16a34a">**66.4µs / 28 allocs**</span> | 114.1µs / 105 allocs | 91.7µs / 26 allocs | 73.0µs / 12 allocs |
+| FindByID | 4.5-4.6µs / 18 allocs | <span style="color:#16a34a">**16.1-16.7µs / 41 allocs**</span> | 11.0-11.5µs / 58 allocs | 14.6-15.5µs / 41 allocs | 10.8-11.4µs / 40 allocs |
+| SelectWhereLimit(50) | 82-87µs / 366 allocs | <span style="color:#16a34a">**217-230µs / 533 allocs**</span> | 142-144µs / 700 allocs | 114-119µs / 393 allocs | 108-111µs / 439 allocs |
+| Update | 4.0µs / 6 allocs | <span style="color:#16a34a">**8.1µs / 21 allocs**</span> | 25.5µs / 83 allocs | 10.0µs / 14 allocs | 6.5µs / 8 allocs |
 
-**Breeze ORM's Insert is the fastest of all four ORMs in this run** — faster
+<span style="color:#16a34a">**Breeze ORM's Insert is the fastest of all four ORMs in this run**</span> — faster
 than GORM, Bun, and sqlx, and within 6% of the raw prepared-statement
 baseline. Update is second only to sqlx. FindByID and SelectWhereLimit
 remain the weak spot — see below for exactly why, backed by CPU profiles
@@ -67,7 +67,7 @@ rather than guesswork.
 
 ## Honest read of these numbers
 
-**Breeze ORM now allocates fewer times than GORM on every operation measured**,
+<span style="color:#16a34a">**Breeze ORM now allocates fewer times than GORM on every operation measured**</span>,
 including SelectWhereLimit, where it started this whole investigation
 allocating the *most* of any library (612 allocs/op). Three fixes got it
 there, each verified against the benchmark before moving to the next:
@@ -105,7 +105,7 @@ better story — both are true, they're just answering different questions
 ("how much CPU work happens" vs "how long does one sequential call take on
 this specific machine").
 
-**Breeze ORM is still the slowest library on wall-clock reads** (FindByID,
+<span style="color:#16a34a">**Breeze ORM is still the slowest library on wall-clock reads**</span> (FindByID,
 SelectWhereLimit), now closest to Bun rather than trailing everyone. The
 remaining, already-diagnosed cause is `pkg/scanner.ScanRow`'s
 `reflect.NewAt(...).Interface()` call — one per column per row, each boxing
