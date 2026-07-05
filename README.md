@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🌊 Breeze ORM
+#  Breeze ORM
 
 ### A Go ORM that doesn't make you choose between fast, safe, and readable.
 
