@@ -330,6 +330,14 @@ What's done, what's stubbed, what's next.
 5. **Security is not optional.** Every identifier is validated. Every attacker-influenced cache is bounded. Every query has a timeout. Request-scoped plugins bypass the plan cache.
 
 ---
+------------------------------------------------------------------------
+
+ Support us ❤️
+ <img width="185" height="215" alt="download" src="https://github.com/user-attachments/assets/def5c7fc-4c6e-480b-91a4-2a574f23a533" />
+ Or 
+ USDT Address (BEP20): 0x2EF70423BC989C5203c9031811179DD6EDe32793
+
+------------------------------------------------------------------------
 
 ## 📄 License
 
