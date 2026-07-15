@@ -17,7 +17,7 @@ import (
 // Pass onEvict to release whatever resource the evicted value holds (e.g.
 // closing a *sql.Stmt). Eviction is capacity-triggered, not time-based.
 type LRU[K comparable, V any] struct {
-        mu       sync.Mutex
+        mu       sync.RWMutex // Task 2.5: RWMutex so GetNoTouch can take RLock
         capacity int
         ll       *list.List // front = most recently used
         items    map[K]*list.Element
@@ -122,6 +122,14 @@ func (c *LRU[K, V]) setLocked(key K, value V) []entry[K, V] {
 // as preparing a statement against the database: without coalescing, a burst
 // of concurrent requests for a not-yet-cached query would each independently
 // pay the round trip).
+//
+// PANIC SAFETY: if compute() panics, the inflight entry is removed and
+// cl.done is closed (so any waiting concurrent callers unblock), then the
+// panic is re-thrown. Without this, a single panic would wedge the cache
+// forever: every subsequent call for the same key would block on the
+// never-closed cl.done channel. The cache is NOT populated on panic
+// (cl.err is set to a non-nil sentinel via the recover path, which the
+// setLocked guard below treats as "don't install").
 func (c *LRU[K, V]) GetOrCompute(key K, compute func() (V, error)) (V, error) {
         c.mu.Lock()
         if el, ok := c.items[key]; ok {
@@ -142,11 +150,26 @@ func (c *LRU[K, V]) GetOrCompute(key K, compute func() (V, error)) (V, error) {
         c.inflight[key] = cl
         c.mu.Unlock()
 
-        cl.value, cl.err = compute()
+        // Capture the panic so we can run cleanup, then re-panic.
+        // Cleanup MUST run regardless of whether compute returned normally
+        // or panicked — otherwise:
+        //   - cl.done is never closed → concurrent callers block forever
+        //   - inflight[key] is never deleted → the key is permanently wedged
+        var panicked bool
+        var panicVal any
+        func() {
+                defer func() {
+                        if r := recover(); r != nil {
+                                panicked = true
+                                panicVal = r
+                        }
+                }()
+                cl.value, cl.err = compute()
+        }()
 
         c.mu.Lock()
         var evicted []entry[K, V]
-        if cl.err == nil {
+        if !panicked && cl.err == nil {
                 evicted = c.setLocked(key, cl.value)
         }
         delete(c.inflight, key)
@@ -157,6 +180,111 @@ func (c *LRU[K, V]) GetOrCompute(key K, compute func() (V, error)) (V, error) {
                 for _, ev := range evicted {
                         c.onEvict(ev.key, ev.value)
                 }
+        }
+
+        if panicked {
+                panic(panicVal) // re-throw so the caller sees the panic
+        }
+        if cl.err != nil {
+                var zero V
+                return zero, cl.err
+        }
+        return cl.value, nil
+}
+
+// GetNoTouch returns the cached value for key WITHOUT promoting it to
+// most-recently-used. Uses an RLock, so concurrent readers don't block
+// each other. Use this for read-hot caches where the access pattern is
+// "a small set of entries hit millions of times" — the LRU order barely
+// changes, so the MoveToFront on every Get is pure overhead and a source
+// of write-lock contention under concurrent load.
+//
+// Trade-off: if the cache is at capacity and a diverse working set is
+// evicting entries, GetNoTouch'd entries are more likely to be evicted
+// (they look "cold" to the LRU policy). For caches where the working set
+// fits comfortably (compiledCache, scanPlanCache — both default 2000
+// entries, plenty for typical apps), this trade-off is fine.
+func (c *LRU[K, V]) GetNoTouch(key K) (V, bool) {
+        c.mu.RLock()
+        el, ok := c.items[key]
+        c.mu.RUnlock()
+
+        if ok {
+                c.hits.Add(1)
+                return el.Value.(*entry[K, V]).value, true
+        }
+        c.misses.Add(1)
+        var zero V
+        return zero, false
+}
+
+// GetOrComputeNoTouch is GetOrCompute with the read-path optimization of
+// GetNoTouch: the hit path uses RLock and does not MoveToFront. The
+// miss-coalescing behavior is unchanged.
+//
+// Use this instead of GetOrCompute for read-hot caches where the LRU
+// order rarely changes (compiledCache, scanPlanCache). The trade-off is
+// the same as GetNoTouch's: under capacity pressure, no-touch entries are
+// more likely to be evicted.
+func (c *LRU[K, V]) GetOrComputeNoTouch(key K, compute func() (V, error)) (V, error) {
+        // Fast path: read-only lookup under RLock.
+        c.mu.RLock()
+        if el, ok := c.items[key]; ok {
+                v := el.Value.(*entry[K, V]).value
+                c.mu.RUnlock()
+                c.hits.Add(1)
+                return v, nil
+        }
+        c.mu.RUnlock()
+        c.misses.Add(1)
+
+        // Slow path: upgrade to write lock, re-check, compute.
+        c.mu.Lock()
+        if el, ok := c.items[key]; ok {
+                v := el.Value.(*entry[K, V]).value
+                c.mu.Unlock()
+                c.hits.Add(1)
+                return v, nil
+        }
+        if cl, ok := c.inflight[key]; ok {
+                c.mu.Unlock()
+                <-cl.done
+                return cl.value, cl.err
+        }
+        cl := &call[V]{done: make(chan struct{})}
+        c.inflight[key] = cl
+        c.mu.Unlock()
+
+        // Same panic-safe compute + cleanup logic as GetOrCompute (Task 1.3).
+        var panicked bool
+        var panicVal any
+        func() {
+                defer func() {
+                        if r := recover(); r != nil {
+                                panicked = true
+                                panicVal = r
+                        }
+                }()
+                cl.value, cl.err = compute()
+        }()
+
+        c.mu.Lock()
+        var evicted []entry[K, V]
+        if !panicked && cl.err == nil {
+                evicted = c.setLocked(key, cl.value)
+        }
+        delete(c.inflight, key)
+        close(cl.done)
+        c.mu.Unlock()
+
+        if c.onEvict != nil {
+                for _, ev := range evicted {
+                        c.onEvict(ev.key, ev.value)
+                }
+        }
+
+        if panicked {
+                panic(panicVal)
         }
         if cl.err != nil {
                 var zero V

@@ -1,40 +1,40 @@
 package orm
 
 import (
-	"context"
-	"database/sql"
-	"errors"
-	"fmt"
-	"reflect"
-	"time"
-	"unsafe"
+        "context"
+        "database/sql"
+        "errors"
+        "fmt"
+        "reflect"
+        "time"
+        "unsafe"
 
-	"github.com/nelthaarion/breezeorm/pkg/compiler"
-	"github.com/nelthaarion/breezeorm/pkg/dialect"
-	ormdriver "github.com/nelthaarion/breezeorm/pkg/driver"
-	"github.com/nelthaarion/breezeorm/pkg/execution"
-	"github.com/nelthaarion/breezeorm/pkg/hooks"
-	"github.com/nelthaarion/breezeorm/pkg/metadata"
-	"github.com/nelthaarion/breezeorm/pkg/planner"
-	"github.com/nelthaarion/breezeorm/pkg/query"
-	"github.com/nelthaarion/breezeorm/pkg/scanner"
-	"github.com/nelthaarion/breezeorm/pkg/transaction"
+        "github.com/nelthaarion/breezeorm/pkg/compiler"
+        "github.com/nelthaarion/breezeorm/pkg/dialect"
+        ormdriver "github.com/nelthaarion/breezeorm/pkg/driver"
+        "github.com/nelthaarion/breezeorm/pkg/execution"
+        "github.com/nelthaarion/breezeorm/pkg/hooks"
+        "github.com/nelthaarion/breezeorm/pkg/metadata"
+        "github.com/nelthaarion/breezeorm/pkg/planner"
+        "github.com/nelthaarion/breezeorm/pkg/query"
+        "github.com/nelthaarion/breezeorm/pkg/scanner"
+        "github.com/nelthaarion/breezeorm/pkg/transaction"
 )
 
 // Query is the fluent query type you build with orm.Model[T](db). Every
 // method (Where, OrderBy, Limit, ...) returns a brand-new *Query[T], so
 // you can branch queries safely:
 //
-//	base := orm.Model[User](db).Where(query.Predicate{Column: "active", Op: query.OpEq, Value: true})
-//	admins := base.Where(query.Predicate{Column: "role", Op: query.OpEq, Value: "admin"})
-//	// base is untouched — admins is base plus one more predicate.
+//      base := orm.Model[User](db).Where(query.Predicate{Column: "active", Op: query.OpEq, Value: true})
+//      admins := base.Where(query.Predicate{Column: "role", Op: query.OpEq, Value: "admin"})
+//      // base is untouched — admins is base plus one more predicate.
 //
 // The embedded query.Builder[T] is immutable (copy-on-write), so this
 // branching is cheap and race-free.
 type Query[T any] struct {
-	db    *DB
-	b     query.Builder[T]
-	table *metadata.Table
+        db    *DB
+        b     query.Builder[T]
+        table *metadata.Table
 }
 
 // Model starts a new query for type T against db. This is the entry point
@@ -46,15 +46,15 @@ type Query[T any] struct {
 // safely. The returned *Query[T] has a nil table in that case; every
 // terminal method checks for nil and returns the error.
 func Model[T any](db *DB) *Query[T] {
-	tbl, err := metadata.Compile[T]()
-	if err != nil {
-		return &Query[T]{db: db, b: query.New[T]("<invalid>"), table: nil}
-	}
-	return &Query[T]{db: db, b: query.New[T](tbl.Name), table: tbl}
+        tbl, err := metadata.Compile[T]()
+        if err != nil {
+                return &Query[T]{db: db, b: query.New[T]("<invalid>"), table: nil}
+        }
+        return &Query[T]{db: db, b: query.New[T](tbl.Name), table: tbl}
 }
 
 func (q *Query[T]) with(b query.Builder[T]) *Query[T] {
-	return &Query[T]{db: q.db, b: b, table: q.table}
+        return &Query[T]{db: q.db, b: b, table: q.table}
 }
 
 // --- fluent passthroughs to query.Builder ----------------------------------
@@ -73,32 +73,32 @@ func (q *Query[T]) Lock(mode dialect.LockMode) *Query[T]       { return q.with(q
 func (q *Query[T]) With(cte query.CTE) *Query[T]               { return q.with(q.b.With(cte)) }
 
 func (q *Query[T]) InnerJoin(table, alias string, on query.Expr) *Query[T] {
-	return q.with(q.b.InnerJoin(table, alias, on))
+        return q.with(q.b.InnerJoin(table, alias, on))
 }
 func (q *Query[T]) LeftJoin(table, alias string, on query.Expr) *Query[T] {
-	return q.with(q.b.LeftJoin(table, alias, on))
+        return q.with(q.b.LeftJoin(table, alias, on))
 }
 func (q *Query[T]) RightJoin(table, alias string, on query.Expr) *Query[T] {
-	return q.with(q.b.RightJoin(table, alias, on))
+        return q.with(q.b.RightJoin(table, alias, on))
 }
 func (q *Query[T]) FullJoin(table, alias string, on query.Expr) *Query[T] {
-	return q.with(q.b.FullJoin(table, alias, on))
+        return q.with(q.b.FullJoin(table, alias, on))
 }
 func (q *Query[T]) CrossJoin(table, alias string) *Query[T] {
-	return q.with(q.b.CrossJoin(table, alias))
+        return q.with(q.b.CrossJoin(table, alias))
 }
 
 func (q *Query[T]) Preload(path string, opts ...func(*query.PreloadSpec)) *Query[T] {
-	return q.with(q.b.Preload(path, opts...))
+        return q.with(q.b.Preload(path, opts...))
 }
 
 // --- compilation helper ---------------------------------------------------
 
 func (q *Query[T]) compile(ctx context.Context) (*compiler.CompiledQuery, error) {
-	if q.table == nil {
-		return nil, fmt.Errorf("orm: model type not compilable (check struct tags)")
-	}
-	return compileCached(ctx, q.db, q.b)
+        if q.table == nil {
+                return nil, fmt.Errorf("orm: model type not compilable (check struct tags)")
+        }
+        return compileCached(ctx, q.db, q.b)
 }
 
 // compileCached is the heart of the "compile once" design. It looks up a
@@ -115,19 +115,21 @@ func (q *Query[T]) compile(ctx context.Context) (*compiler.CompiledQuery, error)
 // MultiTenancy, which injects a per-request tenant predicate), the cache is
 // bypassed entirely. A plan baked with one tenant's predicate must never be
 // served to a different tenant — that's a cross-tenant data leak. For an
-// empty chain (the common case) IsCacheSafe returns true after a single
-// len()==0 check, so there's no overhead when no plugins are registered.
+// empty chain (the common case) db.pluginsCacheSafe is true (computed once
+// in Open, see Task 2.4), so there's no overhead when no plugins are
+// registered — just a single bool read instead of the type-assertion loop
+// IsCacheSafe() runs.
 func compileCached[T any](ctx context.Context, db *DB, b query.Builder[T]) (*compiler.CompiledQuery, error) {
-	key := compiler.PreHash(b, db.dialect.Name())
-	if !db.plugins.IsCacheSafe() {
-		// Request-scoped plugin present — every call gets a fresh compile.
-		// This is correct (the plan may vary by request) and the only cost
-		// is recompiling, which is what the pre-cache code did every call.
-		return compiler.Compile(ctx, b, db.dialect, db.passes, db.plugins)
-	}
-	return db.compiledCache.GetOrCompute(key, func() (*compiler.CompiledQuery, error) {
-		return compiler.Compile(ctx, b, db.dialect, db.passes, db.plugins)
-	})
+        key := compiler.PreHash(b, db.dialect.Name())
+        if !db.pluginsCacheSafe {
+                // Request-scoped plugin present — every call gets a fresh compile.
+                // This is correct (the plan may vary by request) and the only cost
+                // is recompiling, which is what the pre-cache code did every call.
+                return compiler.Compile(ctx, b, db.dialect, db.passes, db.plugins)
+        }
+        return db.compiledCache.GetOrComputeNoTouch(key, func() (*compiler.CompiledQuery, error) {
+                return compiler.Compile(ctx, b, db.dialect, db.passes, db.plugins)
+        })
 }
 
 // --- terminal read operations -----------------------------------------------
@@ -137,167 +139,189 @@ func compileCached[T any](ctx context.Context, db *DB, b query.Builder[T]) (*com
 // share — the only difference between the two is which scanner function
 // consumes the result.
 func (q *Query[T]) queryAndPlan(ctx context.Context) (*compiler.CompiledQuery, *execution.Rows, *scanner.Plan, error) {
-	return q.queryAndPlanBuilder(ctx, q.b)
+        return q.queryAndPlanBuilder(ctx, q.b)
 }
 
 func (q *Query[T]) queryAndPlanBuilder(ctx context.Context, b query.Builder[T]) (*compiler.CompiledQuery, *execution.Rows, *scanner.Plan, error) {
-	if q.table == nil {
-		return nil, nil, nil, fmt.Errorf("orm: model type not compilable (check struct tags)")
-	}
-	cq, err := compileCached(ctx, q.db, b)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	args, err := execution.ExtractArgsFromBuilder(b)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("orm: extract args: %w", err)
-	}
-	gen, err := q.db.executor.Resolve(cq, args)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("orm: generate SQL: %w", err)
-	}
+        if q.table == nil {
+                return nil, nil, nil, fmt.Errorf("orm: model type not compilable (check struct tags)")
+        }
+        cq, err := compileCached(ctx, q.db, b)
+        if err != nil {
+                return nil, nil, nil, err
+        }
+        args, err := execution.ExtractArgsFromBuilder(b)
+        if err != nil {
+                return nil, nil, nil, fmt.Errorf("orm: extract args: %w", err)
+        }
+        gen, err := q.db.executor.Resolve(cq, args)
+        if err != nil {
+                return nil, nil, nil, fmt.Errorf("orm: generate SQL: %w", err)
+        }
 
-	// Plugin hooks (BeforeExecute/AfterExecute). Guarded by len()==0 so
-	// the zero-plugin case (the benchmark default) pays only a single
-	// slice-length check — no time.Now(), no function call. When plugins
-	// ARE registered, BeforeExecute fires before the DB round trip and
-	// AfterExecute fires after it with the wall-clock duration + error,
-	// enabling Auditing/Tracing/Metrics plugins to observe every query.
-	var pluginStart time.Time
-	if len(q.db.plugins) > 0 {
-		ctx, err = q.db.plugins.RunBeforeExecute(ctx, gen.SQL, gen.Args)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("orm: plugin BeforeExecute: %w", err)
-		}
-		pluginStart = time.Now()
-	}
-	rows, err := q.db.executor.Query(ctx, gen)
-	if len(q.db.plugins) > 0 {
-		q.db.plugins.RunAfterExecute(ctx, gen.SQL, int64(time.Since(pluginStart)), err)
-	}
-	if err != nil {
-		return nil, nil, nil, err
-	}
+        // Plugin hooks (BeforeExecute/AfterExecute). Guarded by len()==0 so
+        // the zero-plugin case (the benchmark default) pays only a single
+        // slice-length check — no time.Now(), no function call. When plugins
+        // ARE registered, BeforeExecute fires before the DB round trip and
+        // AfterExecute fires after it with the wall-clock duration + error,
+        // enabling Auditing/Tracing/Metrics plugins to observe every query.
+        var pluginStart time.Time
+        if len(q.db.plugins) > 0 {
+                ctx, err = q.db.plugins.RunBeforeExecute(ctx, gen.SQL, gen.Args)
+                if err != nil {
+                        return nil, nil, nil, fmt.Errorf("orm: plugin BeforeExecute: %w", err)
+                }
+                pluginStart = time.Now()
+        }
+        rows, err := q.db.executor.Query(ctx, gen)
+        if len(q.db.plugins) > 0 {
+                q.db.plugins.RunAfterExecute(ctx, gen.SQL, int64(time.Since(pluginStart)), err)
+        }
+        if err != nil {
+                return nil, nil, nil, err
+        }
 
-	// Reuse the CompiledQuery's CacheKey (already computed by q.compile
-	// above) as the scan-plan cache key too: it already captures the exact
-	// query shape, which is exactly what determines the result column list.
-	// On a hit this skips both rows.Columns() and scanner.Compile's
-	// column-to-field matching entirely — the fix for the read-path
-	// overhead identified in benchmark/README.md.
-	plan, ok := q.db.scanPlanCache.Get(cq.CacheKey)
-	if !ok {
-		cols, err := rows.Columns()
-		if err != nil {
-			rows.Close()
-			return nil, nil, nil, err
-		}
-		plan, err = scanner.Compile(q.table, cols)
-		if err != nil {
-			rows.Close()
-			return nil, nil, nil, err
-		}
-		q.db.scanPlanCache.Set(cq.CacheKey, plan)
-	}
-	return cq, rows, plan, nil
+        // Reuse the CompiledQuery's CacheKey (already computed by q.compile
+        // above) as the scan-plan cache key too: it already captures the exact
+        // query shape, which is exactly what determines the result column list.
+        // On a hit this skips both rows.Columns() and scanner.Compile's
+        // column-to-field matching entirely — the fix for the read-path
+        // overhead identified in benchmark/README.md.
+        plan, ok := q.db.scanPlanCache.GetNoTouch(cq.CacheKey)
+        if !ok {
+                cols, err := rows.Columns()
+                if err != nil {
+                        rows.Close()
+                        return nil, nil, nil, err
+                }
+                plan, err = scanner.Compile(q.table, cols)
+                if err != nil {
+                        rows.Close()
+                        return nil, nil, nil, err
+                }
+                q.db.scanPlanCache.Set(cq.CacheKey, plan)
+        }
+        return cq, rows, plan, nil
 }
 
 // Find executes the query and returns all matching rows.
 func (q *Query[T]) Find(ctx context.Context) ([]T, error) {
-	cq, rows, plan, err := q.queryAndPlan(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return scanner.ScanAllHint[T](rows, plan, resultSizeHint(cq.Physical))
+        cq, rows, plan, err := q.queryAndPlan(ctx)
+        if err != nil {
+                return nil, err
+        }
+        // cq.LimitHint was pre-extracted at compile time (see compiler.Compile),
+        // so this is a struct-field read, not a plan-tree walk per call.
+        hint := cq.LimitHint
+        // Fast path: if a code-generated scanner is registered for this query
+        // shape, use it — no Plan, no Assignments loop, no []any targets
+        // slice, no unsafe.Pointer arithmetic. Falls back to ScanAllHint
+        // (the reflection-based path) when no scanner is registered, which
+        // is the case for any model not processed by cmd/breezeorm-gen.
+        if _, all, ok := scanner.LookupFastScan[T](cq.CacheKey); ok {
+                return scanner.ScanAllHintFast[T](rows, all, hint)
+        }
+        return scanner.ScanAllHint[T](rows, plan, hint)
 }
 
-// resultSizeHint walks a (cached, already-built) physical plan's node tree
-// looking for a NodeLimit, and returns its Limit value as a pre-sizing hint
-// for scanner.ScanAllHint — e.g. Limit(50) means "at most 50 rows are
-// coming back", so ScanAll's blind cap-16 default (which would otherwise
-// force two extra reallocate+copy cycles growing 16→32→64) can be skipped
-// entirely. This walk itself is cheap: cq.Physical is already built and
-// cached by cq.CacheKey (see compileCached), so this is just following a
-// handful of pointers, not a page of query-building work, on every call.
-// Returns 0 (→ ScanAllHint's own default) when there's no LIMIT, or the
-// query isn't a plain read (Root is nil for INSERT/UPDATE/DELETE bodies
-// that don't reach this code path anyway).
+// resultSizeHint is DEPRECATED as of Task 2.2. Use cq.LimitHint instead,
+// which is pre-extracted at compile time. This function is retained only
+// because some internal callers may still reference it during the transition
+// — it is no longer used by Find (which reads cq.LimitHint directly).
+//
+// Deprecated: use compiler.CompiledQuery.LimitHint.
 func resultSizeHint(pp *planner.PhysicalPlan) int {
-	if pp == nil || pp.Logical == nil {
-		return 0
-	}
-	for n := pp.Logical.Root; n != nil; n = n.Input {
-		if n.Kind == planner.NodeLimit && n.Limit != nil {
-			return int(*n.Limit)
-		}
-	}
-	return 0
+        if pp == nil || pp.Logical == nil {
+                return 0
+        }
+        for n := pp.Logical.Root; n != nil; n = n.Input {
+                if n.Kind == planner.NodeLimit && n.Limit != nil {
+                        return int(*n.Limit)
+                }
+        }
+        return 0
 }
 
 // First executes the query with an implicit LIMIT 1 and returns a single
 // result, or an "orm: no rows found" error when nothing matches. Scans
 // directly into *T via scanner.ScanOne — no intermediate []T slice, unlike
 // the old Find(ctx)+index[0] implementation.
+//
+// Fast path: if a code-generated scanner is registered for the query shape
+// (keyed by the limited query's CacheKey), uses ScanOneFast — no Plan, no
+// Assignments, no []any targets slice. Falls back to ScanOne otherwise.
 func (q *Query[T]) First(ctx context.Context) (*T, error) {
-	_, rows, plan, err := q.queryAndPlanBuilder(ctx, q.b.Limit(1))
-	if err != nil {
-		return nil, err
-	}
-	v, err := scanner.ScanOne[T](rows, plan)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("orm: no rows found")
-		}
-		return nil, err
-	}
-	return v, nil
+        cq, rows, plan, err := q.queryAndPlanBuilder(ctx, q.b.Limit(1))
+        if err != nil {
+                return nil, err
+        }
+        // Fast path: code-generated scanner.
+        if one, _, ok := scanner.LookupFastScan[T](cq.CacheKey); ok {
+                v, err := scanner.ScanOneFast[T](rows, one)
+                if err != nil {
+                        if errors.Is(err, sql.ErrNoRows) {
+                                return nil, fmt.Errorf("orm: no rows found")
+                        }
+                        return nil, err
+                }
+                return v, nil
+        }
+        // Slow path: reflection-based.
+        v, err := scanner.ScanOne[T](rows, plan)
+        if err != nil {
+                if errors.Is(err, sql.ErrNoRows) {
+                        return nil, fmt.Errorf("orm: no rows found")
+                }
+                return nil, err
+        }
+        return v, nil
 }
 
 // Count returns the number of rows matching the current WHERE clause.
 func (q *Query[T]) Count(ctx context.Context) (int64, error) {
-	counted := q.Select(query.SelectExpr{Expr: "COUNT(*)", Alias: "count"})
-	cq, err := counted.compile(ctx)
-	if err != nil {
-		return 0, err
-	}
-	args, err := execution.ExtractArgsFromBuilder(counted.b)
-	if err != nil {
-		return 0, err
-	}
-	gen, err := q.db.executor.Resolve(cq, args)
-	if err != nil {
-		return 0, err
-	}
-	// Plugin hooks — same zero-cost-when-empty guard as queryAndPlanBuilder.
-	var pluginStart time.Time
-	if len(q.db.plugins) > 0 {
-		ctx, err = q.db.plugins.RunBeforeExecute(ctx, gen.SQL, gen.Args)
-		if err != nil {
-			return 0, fmt.Errorf("orm: plugin BeforeExecute: %w", err)
-		}
-		pluginStart = time.Now()
-	}
-	rows, err := q.db.executor.Query(ctx, gen)
-	if len(q.db.plugins) > 0 {
-		q.db.plugins.RunAfterExecute(ctx, gen.SQL, int64(time.Since(pluginStart)), err)
-	}
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	var n int64
-	if rows.Next() {
-		if err := rows.Scan(&n); err != nil {
-			return 0, err
-		}
-	}
-	return n, rows.Err()
+        counted := q.Select(query.SelectExpr{Expr: "COUNT(*)", Alias: "count"})
+        cq, err := counted.compile(ctx)
+        if err != nil {
+                return 0, err
+        }
+        args, err := execution.ExtractArgsFromBuilder(counted.b)
+        if err != nil {
+                return 0, err
+        }
+        gen, err := q.db.executor.Resolve(cq, args)
+        if err != nil {
+                return 0, err
+        }
+        // Plugin hooks — same zero-cost-when-empty guard as queryAndPlanBuilder.
+        var pluginStart time.Time
+        if len(q.db.plugins) > 0 {
+                ctx, err = q.db.plugins.RunBeforeExecute(ctx, gen.SQL, gen.Args)
+                if err != nil {
+                        return 0, fmt.Errorf("orm: plugin BeforeExecute: %w", err)
+                }
+                pluginStart = time.Now()
+        }
+        rows, err := q.db.executor.Query(ctx, gen)
+        if len(q.db.plugins) > 0 {
+                q.db.plugins.RunAfterExecute(ctx, gen.SQL, int64(time.Since(pluginStart)), err)
+        }
+        if err != nil {
+                return 0, err
+        }
+        defer rows.Close()
+        var n int64
+        if rows.Next() {
+                if err := rows.Scan(&n); err != nil {
+                        return 0, err
+                }
+        }
+        return n, rows.Err()
 }
 
 // Exists reports whether any row matches the current WHERE clause.
 func (q *Query[T]) Exists(ctx context.Context) (bool, error) {
-	n, err := q.Limit(1).Count(ctx)
-	return n > 0, err
+        n, err := q.Limit(1).Count(ctx)
+        return n > 0, err
 }
 
 // --- terminal write operations ----------------------------------------------
@@ -309,50 +333,50 @@ func (q *Query[T]) Exists(ctx context.Context) (bool, error) {
 // statements, all run inside a single transaction so the batch is atomic:
 // either every row is inserted or none are.
 func (q *Query[T]) CreateBatch(ctx context.Context, models []T) (int64, error) {
-	if q.table == nil {
-		return 0, fmt.Errorf("orm: model type not compilable")
-	}
-	if len(models) == 0 {
-		return 0, nil
-	}
+        if q.table == nil {
+                return 0, fmt.Errorf("orm: model type not compilable")
+        }
+        if len(models) == 0 {
+                return 0, nil
+        }
 
-	cols, colMeta := batchColumns(q.table)
-	var total int64
+        cols, colMeta := batchColumns(q.table)
+        var total int64
 
-	err := transaction.Run(ctx, q.db.sqlDB, nil, transaction.DefaultRetryPolicy(), func(txCtx context.Context) error {
-		total = 0
-		for start := 0; start < len(models); start += execution.MaxBulkInsertRows {
-			end := start + execution.MaxBulkInsertRows
-			if end > len(models) {
-				end = len(models)
-			}
-			rows := make([][]any, 0, end-start)
-			for i := start; i < end; i++ {
-				// rowValues now takes the precomputed colMeta slice (built
-				// once per batch above) instead of rebuilding a per-row
-				// name→FieldIndex map. See rowValues's doc comment.
-				rows = append(rows, rowValues(&models[i], colMeta))
-			}
-			gen, err := execution.GenerateBulkInsert(q.db.dialect, q.table.Name, cols, rows)
-			if err != nil {
-				return err
-			}
-			res, err := q.db.execWithPlugins(txCtx, gen)
-			if err != nil {
-				return err
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			total += n
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return total, nil
+        err := transaction.Run(ctx, q.db.sqlDB, nil, transaction.DefaultRetryPolicy(), func(txCtx context.Context) error {
+                total = 0
+                for start := 0; start < len(models); start += execution.MaxBulkInsertRows {
+                        end := start + execution.MaxBulkInsertRows
+                        if end > len(models) {
+                                end = len(models)
+                        }
+                        rows := make([][]any, 0, end-start)
+                        for i := start; i < end; i++ {
+                                // rowValues now takes the precomputed colMeta slice (built
+                                // once per batch above) instead of rebuilding a per-row
+                                // name→FieldIndex map. See rowValues's doc comment.
+                                rows = append(rows, rowValues(&models[i], colMeta))
+                        }
+                        gen, err := execution.GenerateBulkInsert(q.db.dialect, q.table.Name, cols, rows)
+                        if err != nil {
+                                return err
+                        }
+                        res, err := q.db.execWithPlugins(txCtx, gen)
+                        if err != nil {
+                                return err
+                        }
+                        n, err := res.RowsAffected()
+                        if err != nil {
+                                return err
+                        }
+                        total += n
+                }
+                return nil
+        })
+        if err != nil {
+                return 0, err
+        }
+        return total, nil
 }
 
 // Create inserts model. When the dialect supports RETURNING (Postgres does),
@@ -364,81 +388,81 @@ func (q *Query[T]) CreateBatch(ctx context.Context, models []T) (int64, error) {
 // immediately when the interface isn't satisfied — so models without hooks
 // (the common case) pay no real cost.
 func (q *Query[T]) Create(ctx context.Context, model *T) error {
-	if q.table == nil {
-		return fmt.Errorf("orm: model type not compilable")
-	}
-	if err := hooks.RunBeforeCreate(ctx, model); err != nil {
-		return fmt.Errorf("orm: BeforeCreate hook: %w", err)
-	}
-	assignments := structAssignments(q.table, model, false)
-	b := query.New[T](q.table.Name).Insert(assignments...)
-	cq, err := compileCached(ctx, q.db, b)
-	if err != nil {
-		return err
-	}
-	args, err := execution.ExtractArgsFromBuilder(b)
-	if err != nil {
-		return err
-	}
-	gen, err := q.db.executor.Resolve(cq, args)
-	if err != nil {
-		return err
-	}
-	_, err = q.db.execWithPlugins(ctx, gen)
-	if err != nil {
-		return err
-	}
-	if err := hooks.RunAfterCreate(ctx, model); err != nil {
-		return fmt.Errorf("orm: AfterCreate hook: %w", err)
-	}
-	return nil
+        if q.table == nil {
+                return fmt.Errorf("orm: model type not compilable")
+        }
+        if err := hooks.RunBeforeCreate(ctx, model); err != nil {
+                return fmt.Errorf("orm: BeforeCreate hook: %w", err)
+        }
+        assignments := structAssignments(q.table, model, false)
+        b := query.New[T](q.table.Name).Insert(assignments...)
+        cq, err := compileCached(ctx, q.db, b)
+        if err != nil {
+                return err
+        }
+        args, err := execution.ExtractArgsFromBuilder(b)
+        if err != nil {
+                return err
+        }
+        gen, err := q.db.executor.Resolve(cq, args)
+        if err != nil {
+                return err
+        }
+        _, err = q.db.execWithPlugins(ctx, gen)
+        if err != nil {
+                return err
+        }
+        if err := hooks.RunAfterCreate(ctx, model); err != nil {
+                return fmt.Errorf("orm: AfterCreate hook: %w", err)
+        }
+        return nil
 }
 
 // UpdateAll applies assignments to every row matching the current WHERE
 // clause and returns the number of affected rows.
 func (q *Query[T]) UpdateAll(ctx context.Context, assignments ...query.Assignment) (int64, error) {
-	b := q.b.Update(assignments...)
-	cq, err := compileCached(ctx, q.db, b)
-	if err != nil {
-		return 0, err
-	}
-	args, err := execution.ExtractArgsFromBuilder(b)
-	if err != nil {
-		return 0, err
-	}
-	gen, err := q.db.executor.Resolve(cq, args)
-	if err != nil {
-		return 0, err
-	}
-	res, err := q.db.execWithPlugins(ctx, gen)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+        b := q.b.Update(assignments...)
+        cq, err := compileCached(ctx, q.db, b)
+        if err != nil {
+                return 0, err
+        }
+        args, err := execution.ExtractArgsFromBuilder(b)
+        if err != nil {
+                return 0, err
+        }
+        gen, err := q.db.executor.Resolve(cq, args)
+        if err != nil {
+                return 0, err
+        }
+        res, err := q.db.execWithPlugins(ctx, gen)
+        if err != nil {
+                return 0, err
+        }
+        return res.RowsAffected()
 }
 
 // Delete removes every row matching the current WHERE clause and returns the
 // number of affected rows. Plugins (e.g. SoftDelete) may rewrite this into
 // an UPDATE at the plan level.
 func (q *Query[T]) Delete(ctx context.Context) (int64, error) {
-	b := q.b.Delete()
-	cq, err := compileCached(ctx, q.db, b)
-	if err != nil {
-		return 0, err
-	}
-	args, err := execution.ExtractArgsFromBuilder(b)
-	if err != nil {
-		return 0, err
-	}
-	gen, err := q.db.executor.Resolve(cq, args)
-	if err != nil {
-		return 0, err
-	}
-	res, err := q.db.execWithPlugins(ctx, gen)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+        b := q.b.Delete()
+        cq, err := compileCached(ctx, q.db, b)
+        if err != nil {
+                return 0, err
+        }
+        args, err := execution.ExtractArgsFromBuilder(b)
+        if err != nil {
+                return 0, err
+        }
+        gen, err := q.db.executor.Resolve(cq, args)
+        if err != nil {
+                return 0, err
+        }
+        res, err := q.db.execWithPlugins(ctx, gen)
+        if err != nil {
+                return 0, err
+        }
+        return res.RowsAffected()
 }
 
 // execWithPlugins wraps executor.Exec with BeforeExecute/AfterExecute plugin
@@ -447,20 +471,20 @@ func (q *Query[T]) Delete(ctx context.Context) (int64, error) {
 // len()==0 check — no time.Now(), no function call. When plugins ARE
 // registered, Auditing/Tracing/Metrics get to observe every write.
 func (db *DB) execWithPlugins(ctx context.Context, gen *execution.GeneratedSQL) (ormdriver.Result, error) {
-	var pluginStart time.Time
-	if len(db.plugins) > 0 {
-		var err error
-		ctx, err = db.plugins.RunBeforeExecute(ctx, gen.SQL, gen.Args)
-		if err != nil {
-			return nil, fmt.Errorf("orm: plugin BeforeExecute: %w", err)
-		}
-		pluginStart = time.Now()
-	}
-	res, err := db.executor.Exec(ctx, gen)
-	if len(db.plugins) > 0 {
-		db.plugins.RunAfterExecute(ctx, gen.SQL, int64(time.Since(pluginStart)), err)
-	}
-	return res, err
+        var pluginStart time.Time
+        if len(db.plugins) > 0 {
+                var err error
+                ctx, err = db.plugins.RunBeforeExecute(ctx, gen.SQL, gen.Args)
+                if err != nil {
+                        return nil, fmt.Errorf("orm: plugin BeforeExecute: %w", err)
+                }
+                pluginStart = time.Now()
+        }
+        res, err := db.executor.Exec(ctx, gen)
+        if len(db.plugins) > 0 {
+                db.plugins.RunAfterExecute(ctx, gen.SQL, int64(time.Since(pluginStart)), err)
+        }
+        return res, err
 }
 
 // batchColumns returns the column list CreateBatch inserts into — same
@@ -470,17 +494,17 @@ func (db *DB) execWithPlugins(ctx context.Context, gen *execution.GeneratedSQL) 
 // precomputed Offset (unsafe pointer arithmetic) instead of building a
 // per-row name→FieldIndex map and walking it via reflect.FieldByIndex.
 func batchColumns(tbl *metadata.Table) ([]string, []*metadata.Column) {
-	cols := make([]string, 0, len(tbl.Columns))
-	matched := make([]*metadata.Column, 0, len(tbl.Columns))
-	for i := range tbl.Columns {
-		c := &tbl.Columns[i]
-		if c.IsAutoIncr || c.IsGenerated {
-			continue
-		}
-		cols = append(cols, c.Name)
-		matched = append(matched, c)
-	}
-	return cols, matched
+        cols := make([]string, 0, len(tbl.Columns))
+        matched := make([]*metadata.Column, 0, len(tbl.Columns))
+        for i := range tbl.Columns {
+                c := &tbl.Columns[i]
+                if c.IsAutoIncr || c.IsGenerated {
+                        continue
+                }
+                cols = append(cols, c.Name)
+                matched = append(matched, c)
+        }
+        return cols, matched
 }
 
 // rowValues extracts one row's values in column order, using the precomputed
@@ -493,21 +517,21 @@ func batchColumns(tbl *metadata.Table) ([]string, []*metadata.Column) {
 // calls, all computing the same answer. Now it's a single pointer add per
 // column, matching what the scanner already does on the read side.
 func rowValues[T any](model *T, colMeta []*metadata.Column) []any {
-	out := make([]any, len(colMeta))
-	// Safe: model is a *T pointing to a live struct owned by the caller
-	// for the duration of this call.
-	dest := unsafe.Pointer(model)
-	for i, c := range colMeta {
-		fieldPtr := unsafe.Pointer(uintptr(dest) + c.Offset)
-		// reflect.NewAt(t, ptr).Elem().Interface() is the standard way to
-		// read a typed value out of an unsafe pointer using the column's
-		// cached reflect.Type. It's cheaper than FieldByIndex (which
-		// re-walks the embedding chain every call) because the offset is
-		// already known. A future codegen pass would replace even this with
-		// a direct `*(*T)(ptr)` cast per known column type.
-		out[i] = reflect.NewAt(c.Type, fieldPtr).Elem().Interface()
-	}
-	return out
+        out := make([]any, len(colMeta))
+        // Safe: model is a *T pointing to a live struct owned by the caller
+        // for the duration of this call.
+        dest := unsafe.Pointer(model)
+        for i, c := range colMeta {
+                fieldPtr := unsafe.Add(dest, c.Offset)
+                // reflect.NewAt(t, ptr).Elem().Interface() is the standard way to
+                // read a typed value out of an unsafe pointer using the column's
+                // cached reflect.Type. It's cheaper than FieldByIndex (which
+                // re-walks the embedding chain every call) because the offset is
+                // already known. A future codegen pass would replace even this with
+                // a direct `*(*T)(ptr)` cast per known column type.
+                out[i] = reflect.NewAt(c.Type, fieldPtr).Elem().Interface()
+        }
+        return out
 }
 
 // structAssignments extracts (column, value) pairs for an INSERT or UPDATE,
@@ -516,26 +540,26 @@ func rowValues[T any](model *T, colMeta []*metadata.Column) []any {
 // principle the scanner follows — the offset was already computed at
 // metadata.Compile time but the old version didn't use it here.
 func structAssignments(tbl *metadata.Table, model any, includeAutoIncrement bool) []query.Assignment {
-	v := reflect.ValueOf(model)
-	for v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	// v.UnsafeAddr() is valid because v is addressable (it came from
-	// dereferencing a pointer above). This is the base pointer the Offset
-	// is relative to.
-	dest := unsafe.Pointer(v.UnsafeAddr())
-	out := make([]query.Assignment, 0, len(tbl.Columns))
-	for i := range tbl.Columns {
-		c := &tbl.Columns[i]
-		if c.IsAutoIncr && !includeAutoIncrement {
-			continue
-		}
-		if c.IsGenerated {
-			continue
-		}
-		fieldPtr := unsafe.Pointer(uintptr(dest) + c.Offset)
-		val := reflect.NewAt(c.Type, fieldPtr).Elem().Interface()
-		out = append(out, query.Assignment{Column: c.Name, Value: val})
-	}
-	return out
+        v := reflect.ValueOf(model)
+        for v.Kind() == reflect.Ptr {
+                v = v.Elem()
+        }
+        // v.UnsafeAddr() is valid because v is addressable (it came from
+        // dereferencing a pointer above). This is the base pointer the Offset
+        // is relative to.
+        dest := unsafe.Pointer(v.UnsafeAddr())
+        out := make([]query.Assignment, 0, len(tbl.Columns))
+        for i := range tbl.Columns {
+                c := &tbl.Columns[i]
+                if c.IsAutoIncr && !includeAutoIncrement {
+                        continue
+                }
+                if c.IsGenerated {
+                        continue
+                }
+                fieldPtr := unsafe.Add(dest, c.Offset)
+                val := reflect.NewAt(c.Type, fieldPtr).Elem().Interface()
+                out = append(out, query.Assignment{Column: c.Name, Value: val})
+        }
+        return out
 }

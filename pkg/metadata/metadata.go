@@ -291,7 +291,7 @@ func detectRelationKind(f reflect.StructField, tag Tag) (RelationKind, bool) {
 // FieldPointer returns an unsafe.Pointer to this column's field within a
 // struct value pointed to by base. Used by the zero-reflection scan path.
 func (c *Column) FieldPointer(base unsafe.Pointer) unsafe.Pointer {
-        return unsafe.Pointer(uintptr(base) + c.Offset)
+        return unsafe.Add(base, c.Offset)
 }
 
 func toSnakeCase(s string) string {

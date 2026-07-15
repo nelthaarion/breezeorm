@@ -3,6 +3,7 @@ package compiler
 import (
         "hash/maphash"
 
+        "github.com/nelthaarion/breezeorm/pkg/dialect"
         "github.com/nelthaarion/breezeorm/pkg/query"
 )
 
@@ -78,8 +79,62 @@ func PreHash[T any](b query.Builder[T], dialectName string) uint64 {
         }
         h.WriteByte(byte(b.LockMode()))
 
+        // Upsert conflict target + update-column list (shape-affecting:
+        // different conflict columns or different DO UPDATE SET columns =
+        // different SQL shape, so they MUST participate in the cache key).
+        // Without this, Upsert ON CONFLICT (email) and Upsert ON CONFLICT (id)
+        // would collide and silently reuse each other's cached plan.
+        if b.StmtKind() == query.KindUpsert {
+                target := b.UpsertConflict()
+                h.WriteByte(sepField)
+                h.WriteString(target.Constraint)
+                h.WriteByte(sepField)
+                for _, c := range target.Columns {
+                        h.WriteString(c)
+                        h.WriteByte(sepField)
+                }
+                for _, c := range b.UpsertUpdateCols() {
+                        h.WriteString(c)
+                        h.WriteByte(sepField)
+                }
+        }
+
+        // CTEs (shape-affecting: different WITH clauses = different SQL).
+        for _, cte := range b.CTEs() {
+                h.WriteByte(sepField)
+                h.WriteString(cte.Name)
+                h.WriteByte(sepField)
+                writeBool(&h, cte.Recursive)
+                for _, col := range cte.Columns {
+                        h.WriteString(col)
+                        h.WriteByte(sepField)
+                }
+        }
+
+        // Preloads (shape-affecting: different preload paths trigger different
+        // relation loaders queries downstream). The Where/Limit/Batch flags
+        // are shape-only (presence/absence), never literal values.
+        for _, p := range b.Preloads() {
+                h.WriteByte(sepField)
+                h.WriteString(p.Path)
+                h.WriteByte(sepField)
+                writeBool(&h, p.Where != nil)
+                writeBool(&h, p.Limit != nil)
+                writeBool(&h, p.Batch)
+        }
+
+        // Cursor pagination token presence (NOT the token itself — that's a
+        // per-call literal and would break the shape-only invariant).
+        writeBool(&h, b.CursorAfter() != nil)
+
         return h.Sum64()
 }
+
+// Compile-time assertion that dialect is referenced (suppresses "imported and
+// not used" if a future edit removes the only other use; dialect is used by
+// the upsert test in prehash_test.go which constructs UpsertConflictTarget
+// via the dialect package).
+var _ = dialect.UpsertConflictTarget{}
 
 func writeBuilderExpr(h *maphash.Hash, e query.Expr) {
         switch v := e.(type) {

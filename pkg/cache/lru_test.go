@@ -108,3 +108,168 @@ func TestLRU_Purge(t *testing.T) {
 		t.Errorf("Len() after Purge = %d, want 0", c.Len())
 	}
 }
+
+// --- Task 1.3 regression tests: GetOrCompute panic safety -----------------
+
+func TestGetOrCompute_PanicDoesNotWedgeCache(t *testing.T) {
+	c := NewLRU[string, int](10, nil)
+	key := "k"
+
+	// First call: compute panics. The cache must NOT be wedged after this.
+	var panicked bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		_, _ = c.GetOrCompute(key, func() (int, error) { panic("boom") })
+	}()
+	if !panicked {
+		t.Fatal("expected panic to propagate to caller")
+	}
+
+	// Second call: must NOT block. The cache was not populated (panic path
+	// skips setLocked), so this should re-run compute and succeed.
+	done := make(chan int, 1)
+	go func() {
+		v, err := c.GetOrCompute(key, func() (int, error) { return 42, nil })
+		if err != nil {
+			t.Errorf("unexpected err after panic: %v", err)
+		}
+		done <- v
+	}()
+	select {
+	case v := <-done:
+		if v != 42 {
+			t.Errorf("got %d, want 42", v)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cache wedged: GetOrCompute blocked after a previous panic")
+	}
+}
+
+func TestGetOrCompute_ConcurrentCallersUnblockOnPanic(t *testing.T) {
+	c := NewLRU[string, int](10, nil)
+	key := "k"
+	startCompute := make(chan struct{})
+	computeStarted := make(chan struct{})
+
+	// Goroutine 1: holds the compute slot and panics.
+	go func() {
+		defer func() { _ = recover() }()
+		_, _ = c.GetOrCompute(key, func() (int, error) {
+			close(computeStarted)
+			<-startCompute
+			panic("boom")
+		})
+	}()
+
+	<-computeStarted
+
+	// Goroutine 2: should be blocked on cl.done, waiting for goroutine 1.
+	result := make(chan int, 1)
+	go func() {
+		v, _ := c.GetOrCompute(key, func() (int, error) { return 42, nil })
+		result <- v
+	}()
+
+	close(startCompute) // triggers the panic in goroutine 1
+
+	select {
+	case <-result:
+		// Goroutine 2 unblocked and re-ran compute. Pass.
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent caller blocked forever after panic in compute")
+	}
+}
+
+func TestGetOrCompute_PanicDoesNotPopulateCache(t *testing.T) {
+	c := NewLRU[string, int](10, nil)
+	key := "k"
+
+	// First call: compute panics with a sentinel value.
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = c.GetOrCompute(key, func() (int, error) { panic("nope") })
+	}()
+
+	// The cache must NOT contain the key (panic path skips setLocked).
+	if _, ok := c.Get(key); ok {
+		t.Fatal("cache was populated on panic path — should not be")
+	}
+}
+
+// --- Task 2.5 tests: GetNoTouch / GetOrComputeNoTouch ---------------------
+
+func TestLRU_GetNoTouch_DoesNotPromote(t *testing.T) {
+	c := NewLRU[string, int](2, nil)
+	c.Set("a", 1)
+	c.Set("b", 2)        // "a" is now LRU
+	c.GetNoTouch("a")    // does NOT promote "a"
+	c.Set("c", 3)        // evicts LRU = "a"
+	if _, ok := c.Get("a"); ok {
+		t.Error("GetNoTouch should not have promoted 'a', but it was not evicted")
+	}
+	if _, ok := c.Get("b"); !ok {
+		t.Error("'b' should still be present")
+	}
+}
+
+func TestLRU_GetNoTouch_ReturnsCorrectValue(t *testing.T) {
+	c := NewLRU[string, int](2, nil)
+	c.Set("a", 1)
+	v, ok := c.GetNoTouch("a")
+	if !ok || v != 1 {
+		t.Errorf("GetNoTouch('a') = (%d, %v), want (1, true)", v, ok)
+	}
+	// Non-existent key.
+	v, ok = c.GetNoTouch("missing")
+	if ok || v != 0 {
+		t.Errorf("GetNoTouch('missing') = (%d, %v), want (0, false)", v, ok)
+	}
+}
+
+func TestLRU_GetOrComputeNoTouch_DoesNotPromoteOnHit(t *testing.T) {
+	c := NewLRU[string, int](2, nil)
+	c.Set("a", 1)
+	c.Set("b", 2)
+	// GetOrComputeNoTouch on "a" should NOT promote it.
+	v, err := c.GetOrComputeNoTouch("a", func() (int, error) { return 99, nil })
+	if err != nil || v != 1 {
+		t.Fatalf("GetOrComputeNoTouch hit returned (%d, %v), want (1, nil)", v, err)
+	}
+	c.Set("c", 3) // should evict LRU = "a"
+	if _, ok := c.Get("a"); ok {
+		t.Error("GetOrComputeNoTouch should not have promoted 'a', but it survived eviction")
+	}
+}
+
+func TestLRU_GetOrComputeNoTouch_ComputesOnMiss(t *testing.T) {
+	c := NewLRU[string, int](2, nil)
+	v, err := c.GetOrComputeNoTouch("new", func() (int, error) { return 42, nil })
+	if err != nil || v != 42 {
+		t.Fatalf("GetOrComputeNoTouch miss returned (%d, %v), want (42, nil)", v, err)
+	}
+	// Verify it was stored.
+	if got, ok := c.Get("new"); !ok || got != 42 {
+		t.Errorf("after GetOrComputeNoTouch, Get('new') = (%d, %v), want (42, true)", got, ok)
+	}
+}
+
+func TestShardedLRU_GetNoTouch(t *testing.T) {
+	s := NewShardedLRU[string, int](10, 4, StringHash, nil)
+	s.Set("k", 1)
+	v, ok := s.GetNoTouch("k")
+	if !ok || v != 1 {
+		t.Errorf("GetNoTouch('k') = (%d, %v), want (1, true)", v, ok)
+	}
+}
+
+func TestShardedLRU_GetOrComputeNoTouch(t *testing.T) {
+	s := NewShardedLRU[string, int](10, 4, StringHash, nil)
+	v, err := s.GetOrComputeNoTouch("k", func() (int, error) { return 7, nil })
+	if err != nil || v != 7 {
+		t.Fatalf("GetOrComputeNoTouch returned (%d, %v), want (7, nil)", v, err)
+	}
+}

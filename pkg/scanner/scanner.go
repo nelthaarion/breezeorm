@@ -353,7 +353,7 @@ func (p *Plan) ScanRow(rows RowsSource, dest unsafe.Pointer) error {
 	// it had the same per-column indirect-call overhead ScanOne just lost.
 	for i := range p.Assignments {
 		a := &p.Assignments[i]
-		fp := unsafe.Pointer(uintptr(dest) + a.Column.Offset)
+		fp := unsafe.Add(dest, a.Column.Offset)
 		switch a.Kind {
 		case kindInt:
 			targets[i] = (*int)(fp)
@@ -448,7 +448,7 @@ func ScanOne[T any](rows RowsSource, p *Plan) (*T, error) {
 	assignments := p.Assignments
 	for i := range assignments {
 		a := &assignments[i]
-		fp := unsafe.Pointer(uintptr(dest) + a.Column.Offset)
+		fp := unsafe.Add(dest, a.Column.Offset)
 		switch a.Kind {
 		case kindInt:
 			targets[i] = (*int)(fp)
@@ -563,7 +563,7 @@ func ScanAllHint[T any](rows RowsSource, p *Plan, sizeHint int) ([]T, error) {
 
 		for i := 0; i < n; i++ {
 			a := &assignments[i]
-			fp := unsafe.Pointer(uintptr(dest) + a.Column.Offset)
+			fp := unsafe.Add(dest, a.Column.Offset)
 
 			// Inline switch replaces the a.assign(fp) indirect call: same
 			// pointer-shaped-value-into-any store (still free, still no
@@ -629,4 +629,43 @@ func ScanAllHint[T any](rows RowsSource, p *Plan, sizeHint int) ([]T, error) {
 		return nil, fmt.Errorf("scanner: row iteration: %w", err)
 	}
 	return out, nil
+}
+
+// ScanOneFast is the code-generated counterpart of ScanOne: it decodes at
+// most one row into a freshly allocated *T using the provided FastScanFunc,
+// with no Plan, no Assignments, no []any targets slice, no unsafe.Pointer.
+//
+// Used by Query[T].First when a FastScanFunc is registered for the query's
+// cache key. Falls back to ScanOne (via the caller) when no scanner is
+// registered.
+func ScanOneFast[T any](rows RowsSource, scan FastScanFunc[T]) (*T, error) {
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scanner: row iteration: %w", err)
+		}
+		_ = rows.Close()
+		return nil, sql.ErrNoRows
+	}
+	out := new(T)
+	if err := scan(rows, out); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("scanner: fast scan: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("scanner: close rows: %w", err)
+	}
+	return out, nil
+}
+
+// ScanAllHintFast is the code-generated counterpart of ScanAllHint: it
+// decodes every remaining row into a freshly allocated []T using the
+// provided FastScanAllFunc, with no Plan, no Assignments, no []any, no
+// unsafe.Pointer. sizeHint pre-sizes the slice (e.g., from a LIMIT).
+//
+// Used by Query[T].Find when a FastScanAllFunc is registered for the
+// query's cache key. Falls back to ScanAllHint (via the caller) when no
+// scanner is registered.
+func ScanAllHintFast[T any](rows RowsSource, all FastScanAllFunc[T], sizeHint int) ([]T, error) {
+	return all(rows, sizeHint)
 }

@@ -37,7 +37,12 @@ type DB struct {
         executor *execution.Executor
         passes   []optimizer.Pass
         plugins  plugins.Chain
-        execOpts []execution.Option
+        // pluginsCacheSafe is the pre-computed result of plugins.IsCacheSafe(),
+        // set once in Open(). The plugin chain doesn't change after Open, so
+        // this avoids re-running the type-assertion loop on every compileCached
+        // call (Task 2.4).
+        pluginsCacheSafe bool
+        execOpts         []execution.Option
 
         // compiledCache holds the full output of compiler.Compile (the logical
         // plan, the optimized plan, and the physical plan) keyed by PreHash.
@@ -128,6 +133,9 @@ func Open(sqlDB *sql.DB, d dialect.Dialect, opts ...Option) *DB {
         for _, o := range opts {
                 o(db)
         }
+        // Compute once — the plugin chain doesn't change after Open (Task 2.4).
+        // This avoids a per-call type-assertion loop in compileCached.
+        db.pluginsCacheSafe = db.plugins.IsCacheSafe()
         db.executor = execution.New(sqlDB, d, db.execOpts...)
         return db
 }

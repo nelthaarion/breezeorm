@@ -124,6 +124,21 @@ func (s *ShardedLRU[K, V]) GetOrCompute(key K, compute func() (V, error)) (V, er
         return s.shardFor(key).GetOrCompute(key, compute)
 }
 
+// GetNoTouch returns the cached value for key WITHOUT promoting it to
+// most-recently-used (see LRU.GetNoTouch). Useful for read-hot caches
+// where the access pattern is a small hot set hit millions of times —
+// the MoveToFront on every Get is pure overhead under that pattern.
+func (s *ShardedLRU[K, V]) GetNoTouch(key K) (V, bool) {
+        return s.shardFor(key).GetNoTouch(key)
+}
+
+// GetOrComputeNoTouch is GetOrCompute with the read-path optimization of
+// GetNoTouch: the hit path uses RLock and does not MoveToFront. The
+// miss-coalescing behavior is unchanged. See LRU.GetOrComputeNoTouch.
+func (s *ShardedLRU[K, V]) GetOrComputeNoTouch(key K, compute func() (V, error)) (V, error) {
+        return s.shardFor(key).GetOrComputeNoTouch(key, compute)
+}
+
 // Delete removes a single key from its shard.
 func (s *ShardedLRU[K, V]) Delete(key K) {
         s.shardFor(key).Delete(key)
